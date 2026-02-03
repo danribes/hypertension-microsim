@@ -1,0 +1,131 @@
+{
+  "base_case": {
+    "scenario_name": "base_case",
+    "results": {
+      "icer": 36495.49999007116,
+      "incremental_costs": 14896.940342759466,
+      "incremental_qalys": 0.40818567622891244,
+      "ixa_mean_costs": 137393.333984101,
+      "ixa_mean_qalys": 7.389333313476818,
+      "spiro_mean_costs": 122496.39364134152,
+      "spiro_mean_qalys": 6.981147637247906,
+      "ixa_mi_events": 108,
+      "ixa_stroke_events": 73,
+      "ixa_hf_events": 51,
+      "ixa_esrd_events": 52,
+      "ixa_cv_deaths": 231,
+      "spiro_mi_events": 111,
+      "spiro_stroke_events": 116,
+      "spiro_hf_events": 56,
+      "spiro_esrd_events": 61,
+      "spiro_cv_deaths": 243,
+      "strokes_avoided": 43
+    },
+    "params": {
+      "ixa_monthly_cost": 500
+    },
+    "computed_at": "2026-02-03T18:46:01.238238"
+  },
+  "price_300": {
+    "scenario_name": "price_300",
+    "results": {
+      "icer": 57228.849611667014,
+      "incremental_costs": 22882.40664390073,
+      "incremental_qalys": 0.3998404091497898,
+      "ixa_mean_costs": 137393.333984101,
+      "ixa_mean_qalys": 7.389333313476818,
+      "spiro_mean_costs": 114510.92734020026,
+      "spiro_mean_qalys": 6.989492904327029,
+      "strokes_avoided": 32
+    },
+    "params": {
+      "ixa_monthly_cost": 300
+    },
+    "computed_at": "2026-02-03T18:46:25.664414"
+  },
+  "price_400": {
+    "scenario_name": "price_400",
+    "results": {
+      "icer": 69706.28065342696,
+      "incremental_costs": 15680.681779567734,
+      "incremental_qalys": 0.22495364309466748,
+      "ixa_mean_costs": 137393.333984101,
+      "ixa_mean_qalys": 7.389333313476818,
+      "spiro_mean_costs": 121712.65220453325,
+      "spiro_mean_qalys": 7.164379670382151,
+      "strokes_avoided": 47
+    },
+    "params": {
+      "ixa_monthly_cost": 400
+    },
+    "computed_at": "2026-02-03T18:46:51.483877"
+  },
+  "price_500": {
+    "scenario_name": "price_500",
+    "results": {
+      "icer": 49507.30848051915,
+      "incremental_costs": 21573.140410332402,
+      "incremental_qalys": 0.4357566806287059,
+      "ixa_mean_costs": 137393.333984101,
+      "ixa_mean_qalys": 7.389333313476818,
+      "spiro_mean_costs": 115820.19357376859,
+      "spiro_mean_qalys": 6.953576632848113,
+      "strokes_avoided": 33
+    },
+    "params": {
+      "ixa_monthly_cost": 500
+    },
+    "computed_at": "2026-02-03T18:47:16.930763"
+  },
+  "price_600": {
+    "scenario_name": "price_600",
+    "results": {
+      "icer": 64874.66650231816,
+      "incremental_costs": 18218.315271138417,
+      "incremental_qalys": 0.2808232589602202,
+      "ixa_mean_costs": 137393.333984101,
+      "ixa_mean_qalys": 7.389333313476818,
+      "spiro_mean_costs": 119175.01871296257,
+      "spiro_mean_qalys": 7.108510054516598,
+      "strokes_avoided": 37
+    },
+    "params": {
+      "ixa_monthly_cost": 600
+    },
+    "computed_at": "2026-02-03T18:47:40.057330"
+  },
+  "price_700": {
+    "scenario_name": "price_700",
+    "results": {
+      "icer": 47875.42837495347,
+      "incremental_costs": 17885.541284430205,
+      "incremental_qalys": 0.37358498694472697,
+      "ixa_mean_costs": 137393.333984101,
+      "ixa_mean_qalys": 7.389333313476818,
+      "spiro_mean_costs": 119507.79269967078,
+      "spiro_mean_qalys": 7.0157483265320915,
+      "strokes_avoided": 40
+    },
+    "params": {
+      "ixa_monthly_cost": 700
+    },
+    "computed_at": "2026-02-03T18:48:05.900549"
+  },
+  "price_800": {
+    "scenario_name": "price_800",
+    "results": {
+      "icer": 45758.00850799858,
+      "incremental_costs": 25130.429212606046,
+      "incremental_qalys": 0.5492028615758748,
+      "ixa_mean_costs": 137393.333984101,
+      "ixa_mean_qalys": 7.389333313476818,
+      "spiro_mean_costs": 112262.90477149494,
+      "spiro_mean_qalys": 6.840130451900944,
+      "strokes_avoided": 38
+    },
+    "params": {
+      "ixa_monthly_cost": 800
+    },
+    "computed_at": "2026-02-03T18:48:30.993379"
+  }
+}
