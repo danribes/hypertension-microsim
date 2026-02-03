@@ -16,6 +16,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from src import run_cea, CEAResults, Treatment
+from src.population import PopulationParams, PopulationGenerator
+from src.patient import CardiacState, RenalState
+from src.simulation import Simulation, SimulationConfig
 
 # Page configuration
 st.set_page_config(
@@ -59,14 +62,60 @@ def format_currency(value: float, symbol: str = "$") -> str:
         return f"{symbol}{value:,.0f}"
 
 
-def run_simulation(n_patients: int, time_horizon: int, perspective: str, seed: int) -> CEAResults:
-    """Run the CEA simulation with progress indication."""
-    return run_cea(
+def run_simulation(n_patients: int, time_horizon: int, perspective: str, seed: int,
+                   pop_params: Optional[PopulationParams] = None) -> CEAResults:
+    """Run the CEA simulation with custom population parameters."""
+    from src.patient import Treatment
+    from src.simulation import CEAResults as CEAResultsClass
+
+    # Use custom population params or defaults
+    if pop_params is None:
+        pop_params = PopulationParams(n_patients=n_patients, seed=seed)
+    else:
+        pop_params.n_patients = n_patients
+        pop_params.seed = seed
+
+    # Create simulation config
+    config = SimulationConfig(
         n_patients=n_patients,
-        time_horizon_years=time_horizon,
+        time_horizon_months=time_horizon * 12,
         seed=seed,
-        perspective=perspective
+        cost_perspective=perspective
     )
+
+    sim = Simulation(config)
+
+    # Generate identical populations using same seed
+    generator = PopulationGenerator(pop_params)
+    patients_ixa = generator.generate()
+    results_ixa = sim.run(patients_ixa, Treatment.IXA_001)
+
+    # Regenerate for comparator arm
+    pop_params_comp = PopulationParams(
+        n_patients=n_patients,
+        seed=seed,
+        age_mean=pop_params.age_mean,
+        age_sd=pop_params.age_sd,
+        prop_male=pop_params.prop_male,
+        sbp_mean=pop_params.sbp_mean,
+        sbp_sd=pop_params.sbp_sd,
+        egfr_mean=pop_params.egfr_mean,
+        egfr_sd=pop_params.egfr_sd,
+        diabetes_prev=pop_params.diabetes_prev,
+        smoker_prev=pop_params.smoker_prev,
+        prior_mi_prev=pop_params.prior_mi_prev,
+        prior_stroke_prev=pop_params.prior_stroke_prev,
+        heart_failure_prev=pop_params.heart_failure_prev,
+        adherence_prob=pop_params.adherence_prob,
+    )
+    generator_comp = PopulationGenerator(pop_params_comp)
+    patients_spi = generator_comp.generate()
+    results_spi = sim.run(patients_spi, Treatment.SPIRONOLACTONE)
+
+    cea = CEAResults(intervention=results_ixa, comparator=results_spi)
+    cea.calculate_icer()
+
+    return cea
 
 
 def display_key_metrics(cea: CEAResults, currency: str):
@@ -331,6 +380,80 @@ def main():
     )
 
     st.sidebar.markdown("---")
+    st.sidebar.markdown("## Population Configuration")
+
+    # Demographics
+    with st.sidebar.expander("Demographics", expanded=False):
+        age_mean = st.slider("Mean Age (years)", 40, 80, 62, help="Average age of the cohort")
+        age_sd = st.slider("Age SD", 5, 20, 10, help="Standard deviation of age distribution")
+        prop_male = st.slider("% Male", 0, 100, 55, help="Proportion of male patients") / 100.0
+
+    # Clinical Parameters
+    with st.sidebar.expander("Clinical Parameters", expanded=False):
+        st.markdown("**Blood Pressure (mmHg)**")
+        sbp_mean = st.slider("Mean SBP", 140, 180, 155, help="Mean systolic blood pressure")
+        sbp_sd = st.slider("SBP SD", 5, 25, 15, help="Standard deviation of SBP")
+
+        st.markdown("**Renal Function**")
+        egfr_mean = st.slider("Mean eGFR", 30, 90, 68, help="Mean estimated GFR (mL/min/1.73m²)")
+        egfr_sd = st.slider("eGFR SD", 10, 30, 20, help="Standard deviation of eGFR")
+
+    # Cardiac States (Prior Events)
+    with st.sidebar.expander("Cardiac History (%)", expanded=False):
+        prior_mi_prev = st.slider(
+            "Prior MI",
+            0, 30, 10,
+            help="% with prior myocardial infarction"
+        ) / 100.0
+        prior_stroke_prev = st.slider(
+            "Prior Stroke",
+            0, 20, 5,
+            help="% with prior stroke"
+        ) / 100.0
+        heart_failure_prev = st.slider(
+            "Heart Failure",
+            0, 25, 8,
+            help="% with chronic heart failure"
+        ) / 100.0
+
+    # Comorbidities
+    with st.sidebar.expander("Comorbidities (%)", expanded=False):
+        diabetes_prev = st.slider(
+            "Diabetes",
+            0, 60, 35,
+            help="% with diabetes mellitus"
+        ) / 100.0
+        smoker_prev = st.slider(
+            "Current Smoker",
+            0, 40, 15,
+            help="% currently smoking"
+        ) / 100.0
+        adherence_prob = st.slider(
+            "Treatment Adherence",
+            50, 100, 75,
+            help="% adherent to treatment"
+        ) / 100.0
+
+    # Build population params
+    pop_params = PopulationParams(
+        n_patients=n_patients,
+        seed=seed,
+        age_mean=age_mean,
+        age_sd=age_sd,
+        prop_male=prop_male,
+        sbp_mean=sbp_mean,
+        sbp_sd=sbp_sd,
+        egfr_mean=egfr_mean,
+        egfr_sd=egfr_sd,
+        diabetes_prev=diabetes_prev,
+        smoker_prev=smoker_prev,
+        prior_mi_prev=prior_mi_prev,
+        prior_stroke_prev=prior_stroke_prev,
+        heart_failure_prev=heart_failure_prev,
+        adherence_prob=adherence_prob,
+    )
+
+    st.sidebar.markdown("---")
     st.sidebar.markdown("### About")
     st.sidebar.markdown("""
     This microsimulation model evaluates the cost-effectiveness of
@@ -347,9 +470,10 @@ def main():
     # Run simulation button
     if st.sidebar.button("Run Simulation", type="primary", use_container_width=True):
         with st.spinner(f"Running microsimulation ({n_patients:,} patients per arm, {time_horizon} years)..."):
-            cea_results = run_simulation(n_patients, time_horizon, perspective, seed)
+            cea_results = run_simulation(n_patients, time_horizon, perspective, seed, pop_params)
             st.session_state.cea_results = cea_results
             st.session_state.currency = currency
+            st.session_state.pop_params = pop_params
 
     # Display results if available
     if "cea_results" in st.session_state:
@@ -385,7 +509,7 @@ def main():
         st.divider()
         st.markdown("### Summary")
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
 
         with col1:
             st.markdown(f"""
@@ -397,6 +521,20 @@ def main():
             """)
 
         with col2:
+            # Get population params from session state if available
+            pp = st.session_state.get('pop_params', pop_params)
+            st.markdown(f"""
+            **Population Characteristics:**
+            - Mean age: {pp.age_mean:.0f} years (SD {pp.age_sd:.0f})
+            - Male: {pp.prop_male*100:.0f}%
+            - Mean SBP: {pp.sbp_mean:.0f} mmHg
+            - Mean eGFR: {pp.egfr_mean:.0f} mL/min
+            - Diabetes: {pp.diabetes_prev*100:.0f}%
+            - Prior MI: {pp.prior_mi_prev*100:.0f}%
+            - Heart Failure: {pp.heart_failure_prev*100:.0f}%
+            """)
+
+        with col3:
             events_avoided = cea.comparator.stroke_events - cea.intervention.stroke_events
             mi_avoided = cea.comparator.mi_events - cea.intervention.mi_events
 
