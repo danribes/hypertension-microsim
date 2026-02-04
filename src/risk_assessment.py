@@ -2,9 +2,15 @@
 Baseline risk assessment algorithms for population stratification.
 
 Implements:
-- GCUA phenotype classification (Nelson, Framingham, Bansal)
+- GCUA phenotype classification (Nelson, Framingham, Bansal) - Age ≥60
+- EOCRI phenotype classification (PREVENT-based) - Age 18-59
 - KDIGO risk matrix
 - Framingham CVD risk score
+- PREVENT 30-year/lifetime CVD risk score
+
+The model uses a dual-branch age-based risk architecture:
+- Age ≥ 60: Route to GCUA (existing logic)
+- Age 18-59: Route to EOCRI (new logic for "silent" renal risk)
 
 These assessments are calculated once at baseline for each patient
 and used for subgroup analysis. They do NOT modify model dynamics.
@@ -33,31 +39,47 @@ class RiskInputs:
     sdi_score: float = 50.0  # Social Deprivation Index (0-100)
     nocturnal_sbp: float = 120.0  # mmHg
     is_on_bp_meds: bool = True
+    # EOCRI-specific inputs
+    has_dyslipidemia: bool = False  # For vascular phenotype classification
+    has_obesity: bool = False  # BMI ≥ 30 (alternative to raw BMI)
 
 
 @dataclass
 class BaselineRiskProfile:
     """Baseline risk stratification (calculated once at patient generation)."""
-    
-    # Renal risk (stratification method depends on CKD status)
-    renal_risk_type: Literal["GCUA", "KDIGO"] = "KDIGO"
-    
+
+    # Renal risk (stratification method depends on age and CKD status)
+    # "GCUA" for age 60+, "EOCRI" for age 18-59, "KDIGO" for CKD patients
+    renal_risk_type: Literal["GCUA", "EOCRI", "KDIGO"] = "KDIGO"
+
     # GCUA fields (for non-CKD, age 60+)
     gcua_phenotype: Optional[str] = None  # "I", "II", "III", "IV", "Moderate", "Low"
     gcua_phenotype_name: Optional[str] = None  # "Accelerated Ager", etc.
     gcua_nelson_risk: Optional[float] = None  # 5-year incident CKD risk %
     gcua_cvd_risk: Optional[float] = None  # 10-year CVD risk %
     gcua_mortality_risk: Optional[float] = None  # 5-year mortality risk %
-    
+
+    # EOCRI fields (for non-CKD, age 18-59) - Early-Onset Cardiorenal Risk Indicator
+    eocri_phenotype: Optional[str] = None  # "A", "B", "C", "Low"
+    eocri_phenotype_name: Optional[str] = None  # "Early Metabolic", "Silent Renal", etc.
+    eocri_prevent_risk: Optional[float] = None  # 30-year/lifetime CVD risk % (PREVENT)
+    eocri_renal_progression_risk: Optional[str] = None  # "High", "Moderate", "Low"
+    eocri_albuminuria_status: Optional[str] = None  # "Elevated" (≥30) or "Normal" (<30)
+    eocri_metabolic_burden: Optional[int] = None  # Count of metabolic risk factors (0-4)
+
     # KDIGO fields (for CKD patients)
     kdigo_gfr_category: Optional[str] = None  # "G1", "G2", "G3a", "G3b", "G4", "G5"
     kdigo_albuminuria_category: Optional[str] = None  # "A1", "A2", "A3"
     kdigo_risk_level: Optional[str] = None  # "Low", "Moderate", "High", "Very High"
-    
+
     # Cardiovascular risk (all patients)
     framingham_risk: Optional[float] = None  # 10-year CVD risk %
     framingham_category: Optional[str] = None  # "Low", "Borderline", "Intermediate", "High"
-    
+
+    # PREVENT lifetime risk (age 18-59 patients)
+    prevent_30yr_risk: Optional[float] = None  # 30-year CVD risk %
+    prevent_risk_category: Optional[str] = None  # "Low", "Borderline", "Intermediate", "High"
+
     # Confidence
     risk_profile_confidence: str = "high"  # "high", "moderate", "low" based on missing data
 
@@ -109,6 +131,85 @@ def calculate_gcua_phenotype(inputs: RiskInputs) -> dict:
         'nelson_risk': nelson_risk,
         'cvd_risk': cvd_risk,
         'mortality_risk': mortality_risk,
+        'confidence': confidence
+    }
+
+
+def calculate_eocri_phenotype(inputs: RiskInputs) -> dict:
+    """
+    Calculate EOCRI (Early-Onset Cardiorenal Risk Indicator) phenotype for
+    non-geriatric patients (age 18-59) with preserved eGFR (>60).
+
+    This implements the 2025 AHA/ACC Guidelines recommendation to use PREVENT
+    equation for capturing renal and metabolic risk in younger adults.
+
+    Phenotypes:
+        Type A (Early Metabolic): Resistant HTN + uACR > 30 + Diabetes/Obesity
+            - "Accelerated Ager (Young)" - High lifetime risk for CVD and ESRD
+            - Triggers aggressive BP control + SGLT2i + Statin simulation
+
+        Type B (Silent Renal): Resistant HTN + uACR > 30 + No Diabetes/Normal Lipids
+            - "Isolated Albuminuric" - Key target for early intervention
+            - Low short-term CVD risk but high long-term renal risk
+            - Key Value Driver: Triggers early ASI/RAASi use
+
+        Type C (Premature Vascular): Resistant HTN + uACR < 30 + High Lipids/Smoker
+            - "Vascular Dominant" - Primary risk is premature MI/Stroke
+            - Triggers standard CVD prevention (Statins/Antiplatelets)
+
+    Returns:
+        {
+            'eligible': bool,
+            'phenotype': str,  # "A", "B", "C", "Low"
+            'phenotype_name': str,
+            'prevent_risk': float,  # 30-year CVD risk %
+            'renal_progression_risk': str,  # "High", "Moderate", "Low"
+            'albuminuria_status': str,  # "Elevated" or "Normal"
+            'metabolic_burden': int,  # Count of metabolic factors
+            'confidence': str
+        }
+    """
+    # Check eligibility: Age 18-59, eGFR > 60
+    if inputs.age < 18:
+        return {'eligible': False, 'reason': 'Age < 18'}
+    if inputs.age >= 60:
+        return {'eligible': False, 'reason': 'Age >= 60 (use GCUA instead)'}
+    if inputs.egfr <= 60:
+        return {'eligible': False, 'reason': 'eGFR <= 60 (use KDIGO instead)'}
+
+    # Calculate PREVENT 30-year/lifetime CVD risk
+    prevent_risk = _calculate_prevent_30yr_risk(inputs)
+
+    # Assess albuminuria status (key EOCRI discriminator)
+    has_elevated_uacr = inputs.uacr is not None and inputs.uacr >= 30
+    albuminuria_status = "Elevated" if has_elevated_uacr else "Normal"
+
+    # Calculate metabolic burden score (0-4)
+    metabolic_burden = _calculate_metabolic_burden(inputs)
+
+    # Determine renal progression risk based on albuminuria and metabolic factors
+    renal_progression_risk = _calculate_renal_progression_risk(inputs, has_elevated_uacr)
+
+    # Assign EOCRI phenotype
+    phenotype_info = _assign_eocri_phenotype(
+        inputs, has_elevated_uacr, metabolic_burden, prevent_risk
+    )
+
+    # Confidence assessment
+    missing_count = sum([
+        inputs.uacr is None,
+        inputs.bmi is None,
+    ])
+    confidence = "high" if missing_count == 0 else ("moderate" if missing_count == 1 else "low")
+
+    return {
+        'eligible': True,
+        'phenotype': phenotype_info['type'],
+        'phenotype_name': phenotype_info['name'],
+        'prevent_risk': prevent_risk,
+        'renal_progression_risk': renal_progression_risk,
+        'albuminuria_status': albuminuria_status,
+        'metabolic_burden': metabolic_burden,
         'confidence': confidence
     }
 
@@ -420,22 +521,327 @@ def _assign_phenotype(renal_risk: float, cvd_risk: float, mortality_risk: float)
     # Phenotype IV: The Senescent (takes precedence)
     if mortality_risk >= 50:
         return {'type': 'IV', 'name': 'Senescent'}
-    
+
     # Phenotype I: Accelerated Ager
     if renal_risk >= 15 and cvd_risk >= 20:
         return {'type': 'I', 'name': 'Accelerated Ager'}
-    
+
     # Phenotype II: Silent Renal
     if renal_risk >= 15 and cvd_risk < 7.5:
         return {'type': 'II', 'name': 'Silent Renal'}
-    
+
     # Phenotype III: Vascular Dominant
     if renal_risk < 5 and cvd_risk >= 20:
         return {'type': 'III', 'name': 'Vascular Dominant'}
-    
+
     # Moderate
     if renal_risk >= 5 and renal_risk < 15:
         return {'type': 'Moderate', 'name': 'Moderate Risk'}
-    
+
     # Low
     return {'type': 'Low', 'name': 'Low Risk'}
+
+
+# ============================================
+# EOCRI Internal calculation functions
+# ============================================
+
+def _calculate_prevent_30yr_risk(inputs: RiskInputs) -> float:
+    """
+    Calculate AHA PREVENT 30-year/lifetime CVD risk for younger adults.
+
+    Based on 2024 AHA PREVENT equation which integrates:
+    - Traditional CVD risk factors (SBP, lipids, smoking, diabetes)
+    - Cardiovascular-Kidney-Metabolic (CKM) syndrome variables (eGFR, uACR)
+
+    Unlike Framingham, PREVENT explicitly includes renal function as a core
+    predictor, making it suitable for identifying "silent" renal risk.
+
+    Reference: Khan SS, et al. Circulation 2024; PREVENT equations.
+    """
+    # Base 30-year risk by age and sex
+    # Younger adults have lower baseline but longer exposure time
+    if inputs.sex == "male":
+        if inputs.age >= 50:
+            base_risk = 18.0
+        elif inputs.age >= 40:
+            base_risk = 12.0
+        elif inputs.age >= 30:
+            base_risk = 7.0
+        else:
+            base_risk = 4.0
+    else:  # female
+        if inputs.age >= 50:
+            base_risk = 12.0
+        elif inputs.age >= 40:
+            base_risk = 7.0
+        elif inputs.age >= 30:
+            base_risk = 4.0
+        else:
+            base_risk = 2.5
+
+    multiplier = 1.0
+
+    # SBP effect (PREVENT weights SBP heavily for lifetime risk)
+    if inputs.sbp >= 180:
+        multiplier *= 2.8
+    elif inputs.sbp >= 160:
+        multiplier *= 2.2
+    elif inputs.sbp >= 150:
+        multiplier *= 1.8
+    elif inputs.sbp >= 140:
+        multiplier *= 1.5
+    elif inputs.sbp >= 130:
+        multiplier *= 1.2
+
+    # eGFR effect (CKM integration in PREVENT)
+    if inputs.egfr < 75:
+        multiplier *= 1.5
+    elif inputs.egfr < 90:
+        multiplier *= 1.2
+
+    # uACR effect (key differentiator from Framingham)
+    if inputs.uacr is not None:
+        if inputs.uacr >= 300:
+            multiplier *= 2.5
+        elif inputs.uacr >= 30:
+            multiplier *= 1.7
+
+    # Diabetes (strong lifetime risk factor)
+    if inputs.has_diabetes:
+        # Diabetes in young adults is particularly impactful
+        if inputs.age < 40:
+            multiplier *= 2.8
+        elif inputs.age < 50:
+            multiplier *= 2.2
+        else:
+            multiplier *= 1.8
+
+    # Lipids
+    if inputs.total_chol >= 240:
+        multiplier *= 1.4
+    elif inputs.total_chol >= 200:
+        multiplier *= 1.2
+
+    if inputs.hdl_chol < 40:
+        multiplier *= 1.3
+    elif inputs.hdl_chol < 50:
+        multiplier *= 1.15
+
+    # Smoking (major lifetime impact in young adults)
+    if inputs.is_smoker:
+        if inputs.age < 40:
+            multiplier *= 2.5
+        else:
+            multiplier *= 2.0
+
+    # BMI/Obesity
+    if inputs.bmi is not None:
+        if inputs.bmi >= 35:
+            multiplier *= 1.6
+        elif inputs.bmi >= 30:
+            multiplier *= 1.3
+        elif inputs.bmi >= 25:
+            multiplier *= 1.1
+
+    # Prior CVD (secondary prevention)
+    if inputs.has_cvd:
+        multiplier *= 2.5
+
+    # Heart failure
+    if inputs.has_heart_failure:
+        multiplier *= 2.2
+
+    # Social determinants (SDI effect on lifetime risk)
+    if inputs.sdi_score > 75:
+        multiplier *= 1.3
+    elif inputs.sdi_score > 50:
+        multiplier *= 1.1
+
+    # Nocturnal hypertension (additional risk in PREVENT)
+    if inputs.nocturnal_sbp > 130:
+        multiplier *= 1.2
+
+    # Calculate final risk with cap
+    risk = min(base_risk * multiplier, 85.0)
+    return round(risk, 1)
+
+
+def _calculate_metabolic_burden(inputs: RiskInputs) -> int:
+    """
+    Calculate metabolic burden score for EOCRI classification.
+
+    Counts metabolic risk factors (0-4):
+    - Diabetes
+    - Obesity (BMI >= 30 or has_obesity flag)
+    - Dyslipidemia
+    - Hypertension (assumed present in resistant HTN population)
+
+    Higher burden indicates Type A (Early Metabolic) phenotype.
+    """
+    burden = 0
+
+    # Diabetes
+    if inputs.has_diabetes:
+        burden += 1
+
+    # Obesity
+    is_obese = inputs.has_obesity or (inputs.bmi is not None and inputs.bmi >= 30)
+    if is_obese:
+        burden += 1
+
+    # Dyslipidemia
+    if inputs.has_dyslipidemia:
+        burden += 1
+    elif inputs.total_chol >= 240 or inputs.hdl_chol < 40:
+        burden += 1
+
+    # Hypertension - always present in this population (resistant HTN)
+    burden += 1
+
+    return min(burden, 4)
+
+
+def _calculate_renal_progression_risk(inputs: RiskInputs, has_elevated_uacr: bool) -> str:
+    """
+    Assess renal progression risk for EOCRI.
+
+    Unlike GCUA which uses Nelson equation for 5-year CKD risk,
+    EOCRI focuses on current damage markers (uACR) and acceleration factors.
+
+    Risk Categories:
+    - High: Elevated uACR + diabetes OR eGFR declining toward 60
+    - Moderate: Elevated uACR alone OR multiple metabolic factors
+    - Low: Normal uACR and preserved eGFR
+    """
+    # High risk: albuminuria + diabetes (strong progression driver)
+    if has_elevated_uacr and inputs.has_diabetes:
+        return "High"
+
+    # High risk: severe albuminuria
+    if inputs.uacr is not None and inputs.uacr >= 300:
+        return "High"
+
+    # High risk: borderline eGFR with any albuminuria
+    if inputs.egfr < 75 and has_elevated_uacr:
+        return "High"
+
+    # Moderate risk: isolated elevated uACR
+    if has_elevated_uacr:
+        return "Moderate"
+
+    # Moderate risk: borderline eGFR without albuminuria
+    if inputs.egfr < 75:
+        return "Moderate"
+
+    # Moderate risk: multiple metabolic factors (potential future damage)
+    metabolic_count = sum([
+        inputs.has_diabetes,
+        inputs.bmi is not None and inputs.bmi >= 30,
+        inputs.has_dyslipidemia or inputs.total_chol >= 240,
+        inputs.sbp >= 150  # Severe uncontrolled HTN
+    ])
+    if metabolic_count >= 3:
+        return "Moderate"
+
+    return "Low"
+
+
+def _assign_eocri_phenotype(
+    inputs: RiskInputs,
+    has_elevated_uacr: bool,
+    metabolic_burden: int,
+    prevent_risk: float
+) -> dict:
+    """
+    Assign EOCRI phenotype based on clinical criteria.
+
+    Phenotype Assignment Logic (for patients with eGFR > 60):
+
+    Type A (Early Metabolic / "Accelerated Ager Young"):
+        - Elevated uACR (≥30 mg/g) AND
+        - Diabetes OR Obesity (BMI ≥30)
+        - These patients are on accelerated trajectory for both CVD and ESRD
+
+    Type B (Silent Renal / "Isolated Albuminuric"):
+        - Elevated uACR (≥30 mg/g) AND
+        - NO diabetes AND normal lipids
+        - KEY TARGET: Low short-term CVD risk but high long-term renal risk
+        - Often missed by traditional Framingham-based algorithms
+
+    Type C (Premature Vascular / "Vascular Dominant"):
+        - Normal uACR (<30 mg/g) AND
+        - High lipids OR smoker
+        - Primary risk is premature MI/Stroke, not renal
+
+    Low Risk:
+        - Normal uACR AND
+        - No significant vascular risk factors
+    """
+    # Determine obesity status
+    is_obese = inputs.has_obesity or (inputs.bmi is not None and inputs.bmi >= 30)
+
+    # Determine dyslipidemia/high lipid status
+    has_high_lipids = (
+        inputs.has_dyslipidemia or
+        inputs.total_chol >= 240 or
+        inputs.hdl_chol < 40
+    )
+
+    # Type A: Early Metabolic (Accelerated Ager - Young)
+    # Elevated uACR + (Diabetes OR Obesity)
+    if has_elevated_uacr and (inputs.has_diabetes or is_obese):
+        return {
+            'type': 'A',
+            'name': 'Early Metabolic',
+            'clinical_equivalent': 'Accelerated Ager (Young)',
+            'treatment_trigger': 'Aggressive BP + SGLT2i + Statin'
+        }
+
+    # Type B: Silent Renal (Isolated Albuminuric)
+    # Elevated uACR + NO diabetes + normal/near-normal lipids
+    # This is the KEY target population for EOCRI
+    if has_elevated_uacr and not inputs.has_diabetes and not has_high_lipids:
+        return {
+            'type': 'B',
+            'name': 'Silent Renal',
+            'clinical_equivalent': 'Isolated Albuminuric',
+            'treatment_trigger': 'Early ASI/RAASi + SGLT2i'
+        }
+
+    # Type B also captures: elevated uACR without diabetes (broader definition)
+    # Even with some lipid abnormality, if no diabetes, renal risk dominates
+    if has_elevated_uacr and not inputs.has_diabetes:
+        return {
+            'type': 'B',
+            'name': 'Silent Renal',
+            'clinical_equivalent': 'Isolated Albuminuric',
+            'treatment_trigger': 'Early ASI/RAASi + SGLT2i'
+        }
+
+    # Type C: Premature Vascular (Vascular Dominant)
+    # Normal uACR + (High lipids OR smoker)
+    if not has_elevated_uacr and (has_high_lipids or inputs.is_smoker):
+        return {
+            'type': 'C',
+            'name': 'Premature Vascular',
+            'clinical_equivalent': 'Vascular Dominant',
+            'treatment_trigger': 'Statins + Antiplatelets'
+        }
+
+    # Also classify as Type C if PREVENT risk is high despite normal uACR
+    if not has_elevated_uacr and prevent_risk >= 25:
+        return {
+            'type': 'C',
+            'name': 'Premature Vascular',
+            'clinical_equivalent': 'Vascular Dominant',
+            'treatment_trigger': 'Statins + Antiplatelets'
+        }
+
+    # Low Risk: Normal uACR and no significant vascular risk factors
+    return {
+        'type': 'Low',
+        'name': 'Low Risk',
+        'clinical_equivalent': 'Standard Monitoring',
+        'treatment_trigger': 'Standard HTN Management'
+    }

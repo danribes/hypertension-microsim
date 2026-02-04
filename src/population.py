@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from .patient import Patient, Sex, Treatment, CardiacState, RenalState
 from .risk_assessment import (
     calculate_gcua_phenotype,
+    calculate_eocri_phenotype,
     calculate_kdigo_risk,
     calculate_framingham_risk,
     RiskInputs,
@@ -21,15 +22,25 @@ from .risk_assessment import (
 
 @dataclass
 class PopulationParams:
-    """Parameters for generating patient populations."""
-    
+    """
+    Parameters for generating patient populations.
+
+    Age Distribution Note:
+        The default age range (40-85) can be modified to include younger adults
+        (age_min=18) for populations requiring EOCRI stratification. The model
+        supports a dual-branch architecture:
+        - Age 18-59: EOCRI (Early-Onset Cardiorenal Risk Indicator)
+        - Age 60+: GCUA (Geriatric Cardiorenal-Metabolic Unified Algorithm)
+    """
+
     # Sample size
     n_patients: int = 1000
-    
+
     # Age distribution (years)
+    # Note: Set age_min=18 to include non-geriatric EOCRI population
     age_mean: float = 62.0
     age_sd: float = 10.0
-    age_min: float = 40.0
+    age_min: float = 40.0  # Can lower to 18 for EOCRI-eligible population
     age_max: float = 85.0
     
     # Sex distribution
@@ -328,32 +339,66 @@ class PopulationGenerator:
                 is_on_bp_meds=True,  # All patients in study are on BP meds
                 # New risk factors
                 sdi_score=sdi_scores[i],
-                nocturnal_sbp=nocturnal_sbps[i]
+                nocturnal_sbp=nocturnal_sbps[i],
+                # EOCRI-specific inputs
+                has_dyslipidemia=has_dyslipidemia[i],
+                has_obesity=(bmis[i] >= 30)
             )
-            
+
             baseline_risk = BaselineRiskProfile()
-            
-            # GCUA for age 60+, eGFR > 60
-            if ages[i] >= 60 and egfrs[i] > 60:
-                gcua = calculate_gcua_phenotype(risk_inputs)
-                if gcua['eligible']:
-                    baseline_risk.renal_risk_type = "GCUA"
-                    baseline_risk.gcua_phenotype = gcua['phenotype']
-                    baseline_risk.gcua_phenotype_name = gcua['phenotype_name']
-                    baseline_risk.gcua_nelson_risk = gcua['nelson_risk']
-                    baseline_risk.gcua_cvd_risk = gcua['cvd_risk']
-                    baseline_risk.gcua_mortality_risk = gcua['mortality_risk']
-                    baseline_risk.risk_profile_confidence = gcua['confidence']
-            
-            # KDIGO for CKD patients or if GCUA not eligible
+
+            # ============================================
+            # Dual-Branch Age-Based Risk Architecture
+            # ============================================
+            # Age >= 60: Route to GCUA (Geriatric pathway)
+            # Age 18-59: Route to EOCRI (Non-geriatric pathway)
+            # eGFR <= 60: Route to KDIGO (CKD pathway, regardless of age)
+
+            if egfrs[i] > 60:
+                # Branch based on age
+                if ages[i] >= 60:
+                    # GCUA pathway for geriatric patients (age 60+)
+                    gcua = calculate_gcua_phenotype(risk_inputs)
+                    if gcua['eligible']:
+                        baseline_risk.renal_risk_type = "GCUA"
+                        baseline_risk.gcua_phenotype = gcua['phenotype']
+                        baseline_risk.gcua_phenotype_name = gcua['phenotype_name']
+                        baseline_risk.gcua_nelson_risk = gcua['nelson_risk']
+                        baseline_risk.gcua_cvd_risk = gcua['cvd_risk']
+                        baseline_risk.gcua_mortality_risk = gcua['mortality_risk']
+                        baseline_risk.risk_profile_confidence = gcua['confidence']
+                elif ages[i] >= 18:
+                    # EOCRI pathway for non-geriatric patients (age 18-59)
+                    eocri = calculate_eocri_phenotype(risk_inputs)
+                    if eocri['eligible']:
+                        baseline_risk.renal_risk_type = "EOCRI"
+                        baseline_risk.eocri_phenotype = eocri['phenotype']
+                        baseline_risk.eocri_phenotype_name = eocri['phenotype_name']
+                        baseline_risk.eocri_prevent_risk = eocri['prevent_risk']
+                        baseline_risk.eocri_renal_progression_risk = eocri['renal_progression_risk']
+                        baseline_risk.eocri_albuminuria_status = eocri['albuminuria_status']
+                        baseline_risk.eocri_metabolic_burden = eocri['metabolic_burden']
+                        baseline_risk.prevent_30yr_risk = eocri['prevent_risk']
+                        # Categorize PREVENT risk
+                        if eocri['prevent_risk'] < 10:
+                            baseline_risk.prevent_risk_category = "Low"
+                        elif eocri['prevent_risk'] < 20:
+                            baseline_risk.prevent_risk_category = "Borderline"
+                        elif eocri['prevent_risk'] < 40:
+                            baseline_risk.prevent_risk_category = "Intermediate"
+                        else:
+                            baseline_risk.prevent_risk_category = "High"
+                        baseline_risk.risk_profile_confidence = eocri['confidence']
+
+            # KDIGO for CKD patients (eGFR <= 60) or if neither GCUA nor EOCRI eligible
             if baseline_risk.renal_risk_type == "KDIGO":
                 kdigo = calculate_kdigo_risk(risk_inputs)
                 baseline_risk.kdigo_gfr_category = kdigo['gfr_category']
                 baseline_risk.kdigo_albuminuria_category = kdigo['albuminuria_category']
                 baseline_risk.kdigo_risk_level = kdigo['risk_level']
                 baseline_risk.risk_profile_confidence = kdigo['confidence']
-            
-            # Framingham CVD risk (all patients)
+
+            # Framingham CVD risk (all patients - for comparison)
             fram = calculate_framingham_risk(risk_inputs)
             baseline_risk.framingham_risk = fram['risk']
             baseline_risk.framingham_category = fram['category']
