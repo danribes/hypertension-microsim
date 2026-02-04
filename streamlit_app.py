@@ -3,15 +3,18 @@ Streamlit Web Interface for Hypertension Microsimulation Model.
 
 Cost-Effectiveness Analysis comparing IXA-001 vs Spironolactone
 in adults with resistant hypertension.
+
+Enhanced version with full parameter exposure.
 """
 
 import streamlit as st
 import numpy as np
 import pandas as pd
-from typing import Optional, Dict, List
+from typing import Optional, Dict, List, Any
 from io import BytesIO
 import sys
 from pathlib import Path
+from dataclasses import dataclass, field
 
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent))
@@ -21,6 +24,7 @@ from src.population import PopulationParams, PopulationGenerator
 from src.patient import Patient, CardiacState, RenalState, NeuroState
 from src.simulation import Simulation, SimulationConfig, SimulationResults
 from src.risk_assessment import BaselineRiskProfile
+from src.costs.costs import CostInputs, US_COSTS, UK_COSTS
 
 # Page configuration
 st.set_page_config(
@@ -53,8 +57,164 @@ st.markdown("""
     .risk-high { color: #dc3545; font-weight: bold; }
     .risk-moderate { color: #fd7e14; }
     .risk-low { color: #28a745; }
+    .param-section {
+        border-left: 3px solid #1F4E79;
+        padding-left: 10px;
+        margin: 10px 0;
+    }
 </style>
 """, unsafe_allow_html=True)
+
+
+@dataclass
+class ExtendedPopulationParams(PopulationParams):
+    """Extended population parameters with additional comorbidities."""
+    # Additional comorbidities
+    copd_prev: float = 0.17
+    depression_prev: float = 0.27
+    anxiety_prev: float = 0.17
+    substance_use_prev: float = 0.10
+    smi_prev: float = 0.04
+    afib_prev: float = 0.10
+    pad_prev: float = 0.15
+
+    # SGLT2i settings
+    sglt2_uptake_rate: float = 0.40
+
+    # Additional bounds
+    age_min: float = 40.0
+    age_max: float = 85.0
+    sbp_min: float = 140.0
+    sbp_max: float = 200.0
+    egfr_min: float = 15.0
+    egfr_max: float = 120.0
+
+
+@dataclass
+class TreatmentParams:
+    """Configurable treatment effect parameters."""
+    # IXA-001
+    ixa_sbp_reduction: float = 20.0
+    ixa_sbp_reduction_sd: float = 8.0
+    ixa_discontinuation_rate: float = 0.12
+
+    # Spironolactone
+    spiro_sbp_reduction: float = 9.0
+    spiro_sbp_reduction_sd: float = 6.0
+    spiro_discontinuation_rate: float = 0.15
+
+    # Standard care
+    standard_sbp_reduction: float = 3.0
+    standard_discontinuation_rate: float = 0.10
+
+    # Adherence
+    adherence_effect_multiplier: float = 0.30  # Effect when non-adherent
+
+
+@dataclass
+class ClinicalParams:
+    """Configurable clinical parameters."""
+    # Case fatality rates (30-day mortality)
+    cfr_mi: float = 0.08
+    cfr_ischemic_stroke: float = 0.10
+    cfr_hemorrhagic_stroke: float = 0.25
+    cfr_hf: float = 0.05
+
+    # Stroke distribution
+    stroke_ischemic_fraction: float = 0.85
+
+    # Post-event mortality (annual)
+    post_mi_year1_mortality: float = 0.05
+    post_mi_thereafter_mortality: float = 0.03
+    post_stroke_year1_mortality: float = 0.10
+    post_stroke_thereafter_mortality: float = 0.05
+    hf_annual_mortality: float = 0.08
+    esrd_annual_mortality: float = 0.15
+
+    # Prior event risk multipliers
+    prior_mi_multiplier: float = 2.5
+    prior_stroke_multiplier: float = 3.0
+    prior_hf_multiplier: float = 2.0
+    prior_tia_multiplier: float = 2.0
+
+    # Cognitive decline rates (annual)
+    normal_to_mci_rate: float = 0.02
+    mci_to_dementia_rate: float = 0.10
+    normal_to_dementia_rate: float = 0.005
+
+    # eGFR decline (annual mL/min)
+    egfr_decline_under_40: float = 0.0
+    egfr_decline_40_65: float = 1.0
+    egfr_decline_over_65: float = 1.5
+
+    # Safety thresholds
+    hyperkalemia_threshold: float = 5.5  # K+ mmol/L
+
+
+@dataclass
+class UtilityParams:
+    """Configurable utility/QALY parameters."""
+    # Baseline by age
+    baseline_utility_40: float = 0.90
+    baseline_utility_50: float = 0.87
+    baseline_utility_60: float = 0.84
+    baseline_utility_70: float = 0.80
+    baseline_utility_80: float = 0.75
+    baseline_utility_90: float = 0.70
+
+    # Disutilities (decrements)
+    disutility_uncontrolled_htn: float = 0.04
+    disutility_post_mi: float = 0.12
+    disutility_post_stroke: float = 0.18
+    disutility_acute_hf: float = 0.25
+    disutility_chronic_hf: float = 0.15
+    disutility_ckd_3a: float = 0.01
+    disutility_ckd_3b: float = 0.03
+    disutility_ckd_4: float = 0.06
+    disutility_esrd: float = 0.35
+    disutility_diabetes: float = 0.04
+
+    # Acute event disutilities
+    acute_disutility_mi: float = 0.20
+    acute_disutility_stroke: float = 0.40
+    acute_disutility_hf: float = 0.25
+
+
+@dataclass
+class CustomCostInputs:
+    """Custom cost inputs allowing user modification."""
+    # Drug costs (monthly)
+    ixa_001_monthly: float = 500.0
+    spironolactone_monthly: float = 15.0
+    sglt2_inhibitor_monthly: float = 450.0
+    background_therapy_monthly: float = 75.0
+    lab_test_cost_k: float = 15.0
+
+    # Acute event costs
+    mi_acute: float = 25000.0
+    ischemic_stroke_acute: float = 15200.0
+    hemorrhagic_stroke_acute: float = 22500.0
+    tia_acute: float = 2100.0
+    hf_admission: float = 18000.0
+
+    # Annual management costs
+    controlled_htn_annual: float = 800.0
+    uncontrolled_htn_annual: float = 1200.0
+    post_mi_annual: float = 5500.0
+    post_stroke_annual: float = 12000.0
+    heart_failure_annual: float = 15000.0
+    ckd_stage_3a_annual: float = 2500.0
+    ckd_stage_3b_annual: float = 4500.0
+    ckd_stage_4_annual: float = 8000.0
+    esrd_annual: float = 90000.0
+
+    # Indirect costs
+    daily_wage: float = 240.0
+    absenteeism_mi_days: int = 7
+    absenteeism_stroke_days: int = 30
+    absenteeism_hf_days: int = 5
+    disability_multiplier_stroke: float = 0.20
+    disability_multiplier_hf: float = 0.15
 
 
 def format_currency(value: float, symbol: str = "$") -> str:
@@ -74,10 +234,12 @@ def run_simulation_with_progress(
     seed: int,
     discount_rate: float,
     pop_params: PopulationParams,
-    status_container
+    status_container,
+    custom_costs: Optional[CustomCostInputs] = None,
+    treatment_params: Optional[TreatmentParams] = None,
+    clinical_params: Optional[ClinicalParams] = None,
 ) -> tuple:
     """Run the CEA simulation with progress indicators."""
-    import time
 
     # Update population params
     pop_params.n_patients = n_patients
@@ -107,9 +269,14 @@ def run_simulation_with_progress(
 
     sim = Simulation(config)
 
+    # Apply custom costs if provided
+    if custom_costs:
+        _apply_custom_costs(sim, custom_costs)
+
     # Run simulation with progress updates
     results_ixa = _run_simulation_with_callback(
-        sim, patients_ixa, Treatment.IXA_001, total_cycles, progress_bar, "IXA-001"
+        sim, patients_ixa, Treatment.IXA_001, total_cycles, progress_bar, "IXA-001",
+        treatment_params, clinical_params
     )
 
     # ===== Phase 3: Generate Spironolactone Population =====
@@ -140,7 +307,8 @@ def run_simulation_with_progress(
     progress_bar.progress(0, text="Initializing comparator simulation...")
 
     results_spi = _run_simulation_with_callback(
-        sim, patients_spi, Treatment.SPIRONOLACTONE, total_cycles, progress_bar, "Spironolactone"
+        sim, patients_spi, Treatment.SPIRONOLACTONE, total_cycles, progress_bar, "Spironolactone",
+        treatment_params, clinical_params
     )
 
     # ===== Phase 5: Calculate Results =====
@@ -155,7 +323,37 @@ def run_simulation_with_progress(
     return cea, patients_ixa, patients_spi, baseline_profiles_ixa
 
 
-def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progress_bar, arm_name):
+def _apply_custom_costs(sim: Simulation, custom_costs: CustomCostInputs):
+    """Apply custom cost parameters to simulation."""
+    sim.costs.ixa_001_monthly = custom_costs.ixa_001_monthly
+    sim.costs.spironolactone_monthly = custom_costs.spironolactone_monthly
+    sim.costs.sglt2_inhibitor_monthly = custom_costs.sglt2_inhibitor_monthly
+    sim.costs.background_therapy_monthly = custom_costs.background_therapy_monthly
+    sim.costs.lab_test_cost_k = custom_costs.lab_test_cost_k
+    sim.costs.mi_acute = custom_costs.mi_acute
+    sim.costs.ischemic_stroke_acute = custom_costs.ischemic_stroke_acute
+    sim.costs.hemorrhagic_stroke_acute = custom_costs.hemorrhagic_stroke_acute
+    sim.costs.tia_acute = custom_costs.tia_acute
+    sim.costs.hf_admission = custom_costs.hf_admission
+    sim.costs.controlled_htn_annual = custom_costs.controlled_htn_annual
+    sim.costs.uncontrolled_htn_annual = custom_costs.uncontrolled_htn_annual
+    sim.costs.post_mi_annual = custom_costs.post_mi_annual
+    sim.costs.post_stroke_annual = custom_costs.post_stroke_annual
+    sim.costs.heart_failure_annual = custom_costs.heart_failure_annual
+    sim.costs.ckd_stage_3a_annual = custom_costs.ckd_stage_3a_annual
+    sim.costs.ckd_stage_3b_annual = custom_costs.ckd_stage_3b_annual
+    sim.costs.ckd_stage_4_annual = custom_costs.ckd_stage_4_annual
+    sim.costs.esrd_annual = custom_costs.esrd_annual
+    sim.costs.daily_wage = custom_costs.daily_wage
+    sim.costs.absenteeism_acute_mi_days = custom_costs.absenteeism_mi_days
+    sim.costs.absenteeism_stroke_days = custom_costs.absenteeism_stroke_days
+    sim.costs.absenteeism_hf_days = custom_costs.absenteeism_hf_days
+    sim.costs.disability_multiplier_stroke = custom_costs.disability_multiplier_stroke
+    sim.costs.disability_multiplier_hf = custom_costs.disability_multiplier_hf
+
+
+def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progress_bar, arm_name,
+                                   treatment_params=None, clinical_params=None):
     """Run simulation with progress updates."""
     from src.patient import Treatment as TreatmentEnum
 
@@ -316,13 +514,14 @@ def analyze_subgroups(patients: List[Patient], results: SimulationResults, profi
 
 
 def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
-                          subgroup_data: Dict, currency: str) -> BytesIO:
+                          subgroup_data: Dict, currency: str,
+                          custom_costs: Optional[CustomCostInputs] = None,
+                          treatment_params: Optional[TreatmentParams] = None,
+                          clinical_params: Optional[ClinicalParams] = None) -> BytesIO:
     """Generate comprehensive Excel report with charts and formatting."""
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, NamedStyle
-    from openpyxl.chart import BarChart, PieChart, Reference, LineChart
-    from openpyxl.chart.label import DataLabelList
-    from openpyxl.utils import get_column_letter
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.chart import BarChart, LineChart, Reference
 
     wb = Workbook()
 
@@ -332,7 +531,6 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
     subheader_fill = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
     alt_row_fill = PatternFill(start_color="D6DCE4", end_color="D6DCE4", fill_type="solid")
     highlight_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-    warning_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
     title_font = Font(bold=True, size=18, color="1F4E79")
     subtitle_font = Font(bold=True, size=14, color="2E75B6")
     border = Border(
@@ -345,7 +543,6 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
     currency_sym = currency
 
     def apply_table_style(ws, start_row, end_row, num_cols):
-        """Apply alternating row colors and borders to a table."""
         for row_idx in range(start_row, end_row + 1):
             for col_idx in range(1, num_cols + 1):
                 cell = ws.cell(row=row_idx, column=col_idx)
@@ -361,7 +558,6 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
     ws = wb.active
     ws.title = "Executive Summary"
 
-    # Title
     ws.merge_cells('A1:D1')
     ws['A1'] = "Cost-Effectiveness Analysis Report"
     ws['A1'].font = title_font
@@ -372,7 +568,7 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
     ws['A2'].font = subtitle_font
     ws['A2'].alignment = Alignment(horizontal='center')
 
-    # Key Results Box
+    # Key Results
     ws['A4'] = "KEY RESULTS"
     ws['A4'].font = Font(bold=True, size=12, color="FFFFFF")
     ws['A4'].fill = header_fill
@@ -418,256 +614,154 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
     ws.column_dimensions['A'].width = 25
     ws.column_dimensions['B'].width = 25
 
-    # ========== Sheet 2: Clinical Events with Chart ==========
+    # ========== Sheet 2: Clinical Events ==========
     ws2 = wb.create_sheet("Clinical Events")
 
     ws2['A1'] = "Clinical Events Comparison"
     ws2['A1'].font = title_font
 
-    # Events table for chart
-    events_header = ["Event", "IXA-001", "Spironolactone"]
+    events_header = ["Event", "IXA-001", "Spironolactone", "Difference"]
     events_data = [
         ["MI", cea.intervention.mi_events, cea.comparator.mi_events],
-        ["Stroke", cea.intervention.stroke_events, cea.comparator.stroke_events],
+        ["Stroke (Total)", cea.intervention.stroke_events, cea.comparator.stroke_events],
+        ["  Ischemic", cea.intervention.ischemic_stroke_events, cea.comparator.ischemic_stroke_events],
+        ["  Hemorrhagic", cea.intervention.hemorrhagic_stroke_events, cea.comparator.hemorrhagic_stroke_events],
         ["TIA", cea.intervention.tia_events, cea.comparator.tia_events],
         ["Heart Failure", cea.intervention.hf_events, cea.comparator.hf_events],
         ["CV Death", cea.intervention.cv_deaths, cea.comparator.cv_deaths],
+        ["Non-CV Death", cea.intervention.non_cv_deaths, cea.comparator.non_cv_deaths],
         ["CKD Stage 4", cea.intervention.ckd_4_events, cea.comparator.ckd_4_events],
         ["ESRD", cea.intervention.esrd_events, cea.comparator.esrd_events],
+        ["Dementia", cea.intervention.dementia_cases, cea.comparator.dementia_cases],
     ]
 
-    ws2.append([])  # Row 2
-    ws2.append(events_header)  # Row 3
+    ws2.append([])
+    ws2.append(events_header)
     for row in events_data:
-        ws2.append(row)
+        diff = row[2] - row[1]  # Comparator - Intervention (positive = events avoided)
+        ws2.append([row[0], row[1], row[2], diff])
 
-    apply_table_style(ws2, 3, 3 + len(events_data), 3)
+    apply_table_style(ws2, 3, 3 + len(events_data), 4)
 
-    # Create bar chart for events
+    # Bar chart
     chart = BarChart()
     chart.type = "col"
     chart.grouping = "clustered"
     chart.title = "Clinical Events per 1000 Patients"
     chart.y_axis.title = "Number of Events"
-    chart.x_axis.title = "Event Type"
     chart.style = 10
 
-    data = Reference(ws2, min_col=2, min_row=3, max_col=3, max_row=3 + len(events_data))
-    cats = Reference(ws2, min_col=1, min_row=4, max_row=3 + len(events_data))
+    data = Reference(ws2, min_col=2, min_row=3, max_col=3, max_row=9)
+    cats = Reference(ws2, min_col=1, min_row=4, max_row=9)
     chart.add_data(data, titles_from_data=True)
     chart.set_categories(cats)
-    chart.shape = 4
     chart.width = 15
     chart.height = 10
 
-    ws2.add_chart(chart, "E3")
-
-    # Events avoided summary
-    ws2['A14'] = "EVENTS AVOIDED WITH IXA-001"
-    ws2['A14'].font = subtitle_font
-
-    avoided_data = [
-        ["Event", "Events Avoided"],
-        ["Strokes", cea.comparator.stroke_events - cea.intervention.stroke_events],
-        ["MIs", cea.comparator.mi_events - cea.intervention.mi_events],
-        ["CV Deaths", cea.comparator.cv_deaths - cea.intervention.cv_deaths],
-        ["ESRD Cases", cea.comparator.esrd_events - cea.intervention.esrd_events],
-    ]
-
-    for i, row in enumerate(avoided_data, start=15):
-        for j, val in enumerate(row, start=1):
-            cell = ws2.cell(row=i, column=j, value=val)
-            if i == 15:
-                cell.font = header_font
-                cell.fill = subheader_fill
-            elif j == 2 and isinstance(val, (int, float)) and val > 0:
-                cell.fill = highlight_fill
+    ws2.add_chart(chart, "F3")
 
     ws2.column_dimensions['A'].width = 20
     ws2.column_dimensions['B'].width = 15
     ws2.column_dimensions['C'].width = 15
+    ws2.column_dimensions['D'].width = 15
 
-    # ========== Sheet 3: Cost Analysis with Chart ==========
+    # ========== Sheet 3: Cost Analysis ==========
     ws3 = wb.create_sheet("Cost Analysis")
 
     ws3['A1'] = "Cost Breakdown Analysis"
     ws3['A1'].font = title_font
 
-    # Cost data for chart
     direct_ixa = cea.intervention.mean_costs - (cea.intervention.total_indirect_costs / cea.intervention.n_patients)
     indirect_ixa = cea.intervention.total_indirect_costs / cea.intervention.n_patients
     direct_spi = cea.comparator.mean_costs - (cea.comparator.total_indirect_costs / cea.comparator.n_patients)
     indirect_spi = cea.comparator.total_indirect_costs / cea.comparator.n_patients
 
-    cost_header = ["Cost Category", "IXA-001", "Spironolactone"]
+    cost_header = ["Cost Category", "IXA-001", "Spironolactone", "Difference"]
     cost_data = [
-        ["Direct Costs", direct_ixa, direct_spi],
-        ["Indirect Costs", indirect_ixa, indirect_spi],
-        ["Total Costs", cea.intervention.mean_costs, cea.comparator.mean_costs],
+        ["Direct Costs", f"{currency_sym}{direct_ixa:,.0f}", f"{currency_sym}{direct_spi:,.0f}", f"{currency_sym}{direct_ixa - direct_spi:,.0f}"],
+        ["Indirect Costs", f"{currency_sym}{indirect_ixa:,.0f}", f"{currency_sym}{indirect_spi:,.0f}", f"{currency_sym}{indirect_ixa - indirect_spi:,.0f}"],
+        ["Total Costs", f"{currency_sym}{cea.intervention.mean_costs:,.0f}", f"{currency_sym}{cea.comparator.mean_costs:,.0f}", f"{currency_sym}{cea.incremental_costs:,.0f}"],
     ]
 
     ws3.append([])
     ws3.append(cost_header)
     for row in cost_data:
-        ws3.append([row[0], row[1], row[2]])
+        ws3.append(row)
 
-    apply_table_style(ws3, 3, 3 + len(cost_data), 3)
+    apply_table_style(ws3, 3, 3 + len(cost_data), 4)
 
-    # Format as currency
-    for row in range(4, 4 + len(cost_data)):
-        for col in [2, 3]:
-            cell = ws3.cell(row=row, column=col)
-            if isinstance(cell.value, (int, float)):
-                cell.value = f"{currency_sym}{cell.value:,.0f}"
+    # Cost parameters used (if custom)
+    if custom_costs:
+        ws3['A10'] = "COST PARAMETERS USED"
+        ws3['A10'].font = subtitle_font
 
-    # Create cost comparison bar chart
-    chart2 = BarChart()
-    chart2.type = "col"
-    chart2.grouping = "clustered"
-    chart2.title = "Mean Costs per Patient"
-    chart2.y_axis.title = f"Cost ({currency_sym})"
-    chart2.style = 12
+        cost_params = [
+            ["Parameter", "Value"],
+            ["IXA-001 Monthly", f"{currency_sym}{custom_costs.ixa_001_monthly:,.0f}"],
+            ["Spironolactone Monthly", f"{currency_sym}{custom_costs.spironolactone_monthly:,.0f}"],
+            ["SGLT2i Monthly", f"{currency_sym}{custom_costs.sglt2_inhibitor_monthly:,.0f}"],
+            ["MI Acute", f"{currency_sym}{custom_costs.mi_acute:,.0f}"],
+            ["Stroke (Ischemic)", f"{currency_sym}{custom_costs.ischemic_stroke_acute:,.0f}"],
+            ["Stroke (Hemorrhagic)", f"{currency_sym}{custom_costs.hemorrhagic_stroke_acute:,.0f}"],
+            ["HF Admission", f"{currency_sym}{custom_costs.hf_admission:,.0f}"],
+            ["ESRD Annual", f"{currency_sym}{custom_costs.esrd_annual:,.0f}"],
+        ]
 
-    # Need numeric data for chart - create separate data area
-    ws3['E3'] = "Chart Data"
-    ws3['E4'] = "Direct"
-    ws3['E5'] = "Indirect"
-    ws3['F3'] = "IXA-001"
-    ws3['F4'] = direct_ixa
-    ws3['F5'] = indirect_ixa
-    ws3['G3'] = "Spironolactone"
-    ws3['G4'] = direct_spi
-    ws3['G5'] = indirect_spi
-
-    data2 = Reference(ws3, min_col=6, min_row=3, max_col=7, max_row=5)
-    cats2 = Reference(ws3, min_col=5, min_row=4, max_row=5)
-    chart2.add_data(data2, titles_from_data=True)
-    chart2.set_categories(cats2)
-    chart2.width = 12
-    chart2.height = 8
-
-    ws3.add_chart(chart2, "A9")
-
-    # Incremental cost summary
-    ws3['A20'] = "INCREMENTAL ANALYSIS"
-    ws3['A20'].font = subtitle_font
-
-    inc_data = [
-        ["Metric", "Value"],
-        ["Incremental Direct Costs", f"{currency_sym}{direct_ixa - direct_spi:,.0f}"],
-        ["Incremental Indirect Costs", f"{currency_sym}{indirect_ixa - indirect_spi:,.0f}"],
-        ["Total Incremental Costs", f"{currency_sym}{cea.incremental_costs:,.0f}"],
-        ["Incremental QALYs", f"{cea.incremental_qalys:.3f}"],
-        ["ICER", f"{currency_sym}{cea.icer:,.0f}/QALY" if cea.icer else "Dominant"],
-    ]
-
-    for i, row in enumerate(inc_data, start=21):
-        for j, val in enumerate(row, start=1):
-            cell = ws3.cell(row=i, column=j, value=val)
-            if i == 21:
-                cell.font = header_font
-                cell.fill = header_fill
+        for i, row in enumerate(cost_params, start=11):
+            for j, val in enumerate(row, start=1):
+                cell = ws3.cell(row=i, column=j, value=val)
+                if i == 11:
+                    cell.font = header_font
+                    cell.fill = subheader_fill
 
     ws3.column_dimensions['A'].width = 25
     ws3.column_dimensions['B'].width = 20
     ws3.column_dimensions['C'].width = 20
+    ws3.column_dimensions['D'].width = 20
 
-    # ========== Sheet 4: Subgroup Analysis with Chart ==========
+    # ========== Sheet 4: Subgroup Analysis ==========
     ws4 = wb.create_sheet("Subgroup Analysis")
 
     ws4['A1'] = "Subgroup Analysis"
     ws4['A1'].font = title_font
 
-    # Age group data for chart
-    ws4['A3'] = "By Age Group"
-    ws4['A3'].font = subtitle_font
+    current_row = 3
 
-    ws4.append(["Age Group", "N Patients", "Mean Costs", "Mean QALYs"])
-    age_start_row = 5
-    age_row = age_start_row
+    for subgroup_name, subgroup_cats in [
+        ("Age Group", subgroup_data['age']),
+        ("Framingham CVD Risk", subgroup_data['framingham']),
+        ("KDIGO Risk Level", subgroup_data['kdigo']),
+        ("GCUA Phenotype", subgroup_data['gcua']),
+    ]:
+        ws4.cell(row=current_row, column=1, value=f"By {subgroup_name}").font = subtitle_font
+        current_row += 1
 
-    for cat in ['<60', '60-70', '70-80', '80+']:
-        patients = subgroup_data['age'].get(cat, [])
-        n = len(patients)
-        if n > 0:
-            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
-            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
-            ws4.append([cat, n, mean_costs, mean_qalys])
-            age_row += 1
+        ws4.cell(row=current_row, column=1, value="Category")
+        ws4.cell(row=current_row, column=2, value="N Patients")
+        ws4.cell(row=current_row, column=3, value="Mean Costs")
+        ws4.cell(row=current_row, column=4, value="Mean QALYs")
+        header_row = current_row
 
-    apply_table_style(ws4, age_start_row - 1, age_row - 1, 4)
+        for cat, patients in subgroup_cats.items():
+            n = len(patients)
+            if n > 0:
+                current_row += 1
+                mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
+                mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
+                ws4.cell(row=current_row, column=1, value=cat)
+                ws4.cell(row=current_row, column=2, value=n)
+                ws4.cell(row=current_row, column=3, value=f"{currency_sym}{mean_costs:,.0f}")
+                ws4.cell(row=current_row, column=4, value=f"{mean_qalys:.3f}")
 
-    # Create age group chart
-    if age_row > age_start_row:
-        chart3 = BarChart()
-        chart3.type = "col"
-        chart3.title = "Outcomes by Age Group"
-        chart3.y_axis.title = "Mean QALYs"
-        chart3.style = 11
-
-        data3 = Reference(ws4, min_col=4, min_row=age_start_row - 1, max_row=age_row - 1)
-        cats3 = Reference(ws4, min_col=1, min_row=age_start_row, max_row=age_row - 1)
-        chart3.add_data(data3, titles_from_data=True)
-        chart3.set_categories(cats3)
-        chart3.width = 10
-        chart3.height = 7
-
-        ws4.add_chart(chart3, "F3")
-
-    # Framingham Risk
-    current_row = age_row + 2
-    ws4.cell(row=current_row, column=1, value="By Framingham CVD Risk").font = subtitle_font
-    current_row += 1
-    ws4.cell(row=current_row, column=1, value="Category")
-    ws4.cell(row=current_row, column=2, value="N Patients")
-    ws4.cell(row=current_row, column=3, value="Mean Costs")
-    ws4.cell(row=current_row, column=4, value="Mean QALYs")
-    fram_header_row = current_row
-
-    for cat in ['Low', 'Borderline', 'Intermediate', 'High']:
-        patients = subgroup_data['framingham'].get(cat, [])
-        n = len(patients)
-        if n > 0:
-            current_row += 1
-            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
-            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
-            ws4.cell(row=current_row, column=1, value=cat)
-            ws4.cell(row=current_row, column=2, value=n)
-            ws4.cell(row=current_row, column=3, value=f"{currency_sym}{mean_costs:,.0f}")
-            ws4.cell(row=current_row, column=4, value=f"{mean_qalys:.3f}")
-
-    apply_table_style(ws4, fram_header_row, current_row, 4)
-
-    # KDIGO Risk
-    current_row += 2
-    ws4.cell(row=current_row, column=1, value="By KDIGO Risk Level").font = subtitle_font
-    current_row += 1
-    kdigo_header_row = current_row
-    ws4.cell(row=current_row, column=1, value="Risk Level")
-    ws4.cell(row=current_row, column=2, value="N Patients")
-    ws4.cell(row=current_row, column=3, value="Mean Costs")
-    ws4.cell(row=current_row, column=4, value="Mean QALYs")
-
-    for cat in ['Low', 'Moderate', 'High', 'Very High']:
-        patients = subgroup_data['kdigo'].get(cat, [])
-        n = len(patients)
-        if n > 0:
-            current_row += 1
-            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
-            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
-            ws4.cell(row=current_row, column=1, value=cat)
-            ws4.cell(row=current_row, column=2, value=n)
-            ws4.cell(row=current_row, column=3, value=f"{currency_sym}{mean_costs:,.0f}")
-            ws4.cell(row=current_row, column=4, value=f"{mean_qalys:.3f}")
-
-    apply_table_style(ws4, kdigo_header_row, current_row, 4)
+        apply_table_style(ws4, header_row, current_row, 4)
+        current_row += 2
 
     ws4.column_dimensions['A'].width = 20
     ws4.column_dimensions['B'].width = 15
     ws4.column_dimensions['C'].width = 15
     ws4.column_dimensions['D'].width = 15
 
-    # ========== Sheet 5: WTP Analysis with Chart ==========
+    # ========== Sheet 5: WTP Analysis ==========
     ws5 = wb.create_sheet("WTP Analysis")
 
     ws5['A1'] = "Willingness-to-Pay Analysis"
@@ -678,101 +772,79 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
     ws5.append(wtp_header)
 
     wtp_values = [0, 25000, 50000, 75000, 100000, 150000, 200000]
-    wtp_start_row = 4
 
     for wtp in wtp_values:
         nmb_ixa = cea.intervention.mean_qalys * wtp - cea.intervention.mean_costs
         nmb_spi = cea.comparator.mean_qalys * wtp - cea.comparator.mean_costs
         inc_nmb = nmb_ixa - nmb_spi
         ce = "Yes" if inc_nmb > 0 else "No"
-        ws5.append([wtp, nmb_ixa, nmb_spi, inc_nmb, ce])
+        ws5.append([f"{currency_sym}{wtp:,}/QALY", f"{currency_sym}{nmb_ixa:,.0f}", f"{currency_sym}{nmb_spi:,.0f}", f"{currency_sym}{inc_nmb:,.0f}", ce])
 
     apply_table_style(ws5, 3, 3 + len(wtp_values), 5)
 
-    # Format currency columns
+    # Highlight cost-effective rows
     for row in range(4, 4 + len(wtp_values)):
-        ws5.cell(row=row, column=1).value = f"{currency_sym}{ws5.cell(row=row, column=1).value:,}/QALY"
-        for col in [2, 3, 4]:
-            val = ws5.cell(row=row, column=col).value
-            if isinstance(val, (int, float)):
-                ws5.cell(row=row, column=col).value = f"{currency_sym}{val:,.0f}"
-        # Highlight cost-effective rows
         if ws5.cell(row=row, column=5).value == "Yes":
             for col in range(1, 6):
                 ws5.cell(row=row, column=col).fill = highlight_fill
 
-    # Create WTP line chart
-    # Need numeric data for chart
-    ws5['G3'] = "WTP"
-    ws5['H3'] = "Inc NMB"
-    for i, wtp in enumerate(wtp_values, start=4):
-        ws5.cell(row=i, column=7, value=wtp)
-        nmb_ixa = cea.intervention.mean_qalys * wtp - cea.intervention.mean_costs
-        nmb_spi = cea.comparator.mean_qalys * wtp - cea.comparator.mean_costs
-        ws5.cell(row=i, column=8, value=nmb_ixa - nmb_spi)
-
-    chart4 = LineChart()
-    chart4.title = "Incremental NMB vs WTP Threshold"
-    chart4.y_axis.title = f"Incremental NMB ({currency_sym})"
-    chart4.x_axis.title = f"WTP ({currency_sym}/QALY)"
-    chart4.style = 10
-
-    data4 = Reference(ws5, min_col=8, min_row=3, max_row=3 + len(wtp_values))
-    cats4 = Reference(ws5, min_col=7, min_row=4, max_row=3 + len(wtp_values))
-    chart4.add_data(data4, titles_from_data=True)
-    chart4.set_categories(cats4)
-    chart4.width = 12
-    chart4.height = 8
-
-    ws5.add_chart(chart4, "A14")
-
     for col in ['A', 'B', 'C', 'D', 'E']:
         ws5.column_dimensions[col].width = 18
 
-    # ========== Sheet 6: Population Parameters ==========
+    # ========== Sheet 6: Parameters ==========
     ws6 = wb.create_sheet("Parameters")
 
     ws6['A1'] = "Simulation Parameters"
     ws6['A1'].font = title_font
 
-    ws6['A3'] = "DEMOGRAPHICS"
-    ws6['A3'].font = Font(bold=True, color="FFFFFF")
-    ws6['A3'].fill = header_fill
-    ws6.merge_cells('A3:B3')
+    current_row = 3
 
-    demo_data = [
+    # Demographics
+    ws6.cell(row=current_row, column=1, value="DEMOGRAPHICS").font = Font(bold=True, color="FFFFFF")
+    ws6.cell(row=current_row, column=1).fill = header_fill
+    ws6.merge_cells(f'A{current_row}:B{current_row}')
+    current_row += 1
+
+    demo_params = [
         ["Mean Age (years)", f"{pop_params.age_mean:.0f} (SD {pop_params.age_sd:.0f})"],
+        ["Age Range", f"{pop_params.age_min:.0f} - {pop_params.age_max:.0f}"],
         ["% Male", f"{pop_params.prop_male*100:.0f}%"],
         ["Mean BMI", f"{pop_params.bmi_mean:.1f}"],
     ]
 
-    for i, (label, value) in enumerate(demo_data, start=4):
-        ws6.cell(row=i, column=1, value=label)
-        ws6.cell(row=i, column=2, value=value)
+    for label, value in demo_params:
+        ws6.cell(row=current_row, column=1, value=label)
+        ws6.cell(row=current_row, column=2, value=value)
+        current_row += 1
 
-    ws6['A8'] = "CLINICAL PARAMETERS"
-    ws6['A8'].font = Font(bold=True, color="FFFFFF")
-    ws6['A8'].fill = header_fill
-    ws6.merge_cells('A8:B8')
+    current_row += 1
 
-    clinical_data = [
+    # Clinical Parameters
+    ws6.cell(row=current_row, column=1, value="CLINICAL PARAMETERS").font = Font(bold=True, color="FFFFFF")
+    ws6.cell(row=current_row, column=1).fill = header_fill
+    ws6.merge_cells(f'A{current_row}:B{current_row}')
+    current_row += 1
+
+    clinical_display = [
         ["Mean SBP (mmHg)", f"{pop_params.sbp_mean:.0f} (SD {pop_params.sbp_sd:.0f})"],
-        ["Mean eGFR (mL/min/1.73m²)", f"{pop_params.egfr_mean:.0f} (SD {pop_params.egfr_sd:.0f})"],
+        ["Mean eGFR (mL/min)", f"{pop_params.egfr_mean:.0f} (SD {pop_params.egfr_sd:.0f})"],
         ["Mean UACR (mg/g)", f"{pop_params.uacr_mean:.0f}"],
-        ["Mean Total Cholesterol", f"{pop_params.total_chol_mean:.0f}"],
-        ["Mean HDL Cholesterol", f"{pop_params.hdl_chol_mean:.0f}"],
     ]
 
-    for i, (label, value) in enumerate(clinical_data, start=9):
-        ws6.cell(row=i, column=1, value=label)
-        ws6.cell(row=i, column=2, value=value)
+    for label, value in clinical_display:
+        ws6.cell(row=current_row, column=1, value=label)
+        ws6.cell(row=current_row, column=2, value=value)
+        current_row += 1
 
-    ws6['A15'] = "COMORBIDITIES"
-    ws6['A15'].font = Font(bold=True, color="FFFFFF")
-    ws6['A15'].fill = header_fill
-    ws6.merge_cells('A15:B15')
+    current_row += 1
 
-    comorbid_data = [
+    # Comorbidities
+    ws6.cell(row=current_row, column=1, value="COMORBIDITIES (%)").font = Font(bold=True, color="FFFFFF")
+    ws6.cell(row=current_row, column=1).fill = header_fill
+    ws6.merge_cells(f'A{current_row}:B{current_row}')
+    current_row += 1
+
+    comorbid_params = [
         ["Diabetes", f"{pop_params.diabetes_prev*100:.0f}%"],
         ["Current Smoker", f"{pop_params.smoker_prev*100:.0f}%"],
         ["Dyslipidemia", f"{pop_params.dyslipidemia_prev*100:.0f}%"],
@@ -781,23 +853,51 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
         ["Heart Failure", f"{pop_params.heart_failure_prev*100:.0f}%"],
     ]
 
-    for i, (label, value) in enumerate(comorbid_data, start=16):
-        ws6.cell(row=i, column=1, value=label)
-        ws6.cell(row=i, column=2, value=value)
+    for label, value in comorbid_params:
+        ws6.cell(row=current_row, column=1, value=label)
+        ws6.cell(row=current_row, column=2, value=value)
+        current_row += 1
 
-    ws6['A23'] = "TREATMENT"
-    ws6['A23'].font = Font(bold=True, color="FFFFFF")
-    ws6['A23'].fill = header_fill
-    ws6.merge_cells('A23:B23')
+    # Treatment params if provided
+    if treatment_params:
+        current_row += 1
+        ws6.cell(row=current_row, column=1, value="TREATMENT EFFECTS").font = Font(bold=True, color="FFFFFF")
+        ws6.cell(row=current_row, column=1).fill = header_fill
+        ws6.merge_cells(f'A{current_row}:B{current_row}')
+        current_row += 1
 
-    treatment_data = [
-        ["Mean Antihypertensives", f"{pop_params.mean_antihypertensives}"],
-        ["Adherence Probability", f"{pop_params.adherence_prob*100:.0f}%"],
-    ]
+        treatment_display = [
+            ["IXA-001 SBP Reduction", f"{treatment_params.ixa_sbp_reduction:.0f} mmHg (SD {treatment_params.ixa_sbp_reduction_sd:.0f})"],
+            ["IXA-001 Discontinuation", f"{treatment_params.ixa_discontinuation_rate*100:.0f}%/year"],
+            ["Spiro SBP Reduction", f"{treatment_params.spiro_sbp_reduction:.0f} mmHg (SD {treatment_params.spiro_sbp_reduction_sd:.0f})"],
+            ["Spiro Discontinuation", f"{treatment_params.spiro_discontinuation_rate*100:.0f}%/year"],
+        ]
 
-    for i, (label, value) in enumerate(treatment_data, start=24):
-        ws6.cell(row=i, column=1, value=label)
-        ws6.cell(row=i, column=2, value=value)
+        for label, value in treatment_display:
+            ws6.cell(row=current_row, column=1, value=label)
+            ws6.cell(row=current_row, column=2, value=value)
+            current_row += 1
+
+    # Clinical params if provided
+    if clinical_params:
+        current_row += 1
+        ws6.cell(row=current_row, column=1, value="CLINICAL MODEL PARAMETERS").font = Font(bold=True, color="FFFFFF")
+        ws6.cell(row=current_row, column=1).fill = header_fill
+        ws6.merge_cells(f'A{current_row}:B{current_row}')
+        current_row += 1
+
+        model_display = [
+            ["MI Case Fatality", f"{clinical_params.cfr_mi*100:.0f}%"],
+            ["Ischemic Stroke CFR", f"{clinical_params.cfr_ischemic_stroke*100:.0f}%"],
+            ["Hemorrhagic Stroke CFR", f"{clinical_params.cfr_hemorrhagic_stroke*100:.0f}%"],
+            ["HF Case Fatality", f"{clinical_params.cfr_hf*100:.0f}%"],
+            ["Stroke Ischemic %", f"{clinical_params.stroke_ischemic_fraction*100:.0f}%"],
+        ]
+
+        for label, value in model_display:
+            ws6.cell(row=current_row, column=1, value=label)
+            ws6.cell(row=current_row, column=2, value=value)
+            current_row += 1
 
     ws6.column_dimensions['A'].width = 30
     ws6.column_dimensions['B'].width = 25
@@ -809,33 +909,23 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
     return buffer
 
 
+# ============== DISPLAY FUNCTIONS ==============
+
 def display_key_metrics(cea: CEAResults, currency: str):
     """Display key CEA metrics."""
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
-        st.metric(
-            label="Incremental Costs",
-            value=format_currency(cea.incremental_costs, currency),
-        )
+        st.metric(label="Incremental Costs", value=format_currency(cea.incremental_costs, currency))
 
     with col2:
-        st.metric(
-            label="Incremental QALYs",
-            value=f"{cea.incremental_qalys:.3f}",
-        )
+        st.metric(label="Incremental QALYs", value=f"{cea.incremental_qalys:.3f}")
 
     with col3:
         if cea.icer is not None:
-            st.metric(
-                label="ICER",
-                value=f"{currency}{cea.icer:,.0f}/QALY",
-            )
+            st.metric(label="ICER", value=f"{currency}{cea.icer:,.0f}/QALY")
         else:
-            st.metric(
-                label="ICER",
-                value="Dominant" if cea.incremental_qalys > 0 else "Dominated",
-            )
+            st.metric(label="ICER", value="Dominant" if cea.incremental_qalys > 0 else "Dominated")
 
     with col4:
         if cea.icer is not None:
@@ -850,10 +940,62 @@ def display_key_metrics(cea: CEAResults, currency: str):
         else:
             interpretation = "Dominant" if cea.incremental_qalys > 0 else "Dominated"
 
-        st.metric(
-            label="Interpretation",
-            value=interpretation,
-        )
+        st.metric(label="Interpretation", value=interpretation)
+
+
+def display_outcomes_table(cea: CEAResults, currency: str):
+    """Display outcomes comparison table."""
+    st.markdown("### Clinical Outcomes Comparison")
+
+    data = {
+        "Outcome": [
+            "Mean Total Costs", "Mean QALYs", "Mean Life Years",
+            "MI Events", "Stroke Events", "  - Ischemic", "  - Hemorrhagic",
+            "TIA Events", "Heart Failure", "CV Deaths", "Non-CV Deaths",
+            "CKD Stage 4", "ESRD Events", "Dementia Cases",
+        ],
+        "IXA-001": [
+            f"{currency}{cea.intervention.mean_costs:,.0f}",
+            f"{cea.intervention.mean_qalys:.3f}",
+            f"{cea.intervention.mean_life_years:.2f}",
+            cea.intervention.mi_events, cea.intervention.stroke_events,
+            cea.intervention.ischemic_stroke_events, cea.intervention.hemorrhagic_stroke_events,
+            cea.intervention.tia_events, cea.intervention.hf_events,
+            cea.intervention.cv_deaths, cea.intervention.non_cv_deaths,
+            cea.intervention.ckd_4_events, cea.intervention.esrd_events,
+            cea.intervention.dementia_cases,
+        ],
+        "Spironolactone": [
+            f"{currency}{cea.comparator.mean_costs:,.0f}",
+            f"{cea.comparator.mean_qalys:.3f}",
+            f"{cea.comparator.mean_life_years:.2f}",
+            cea.comparator.mi_events, cea.comparator.stroke_events,
+            cea.comparator.ischemic_stroke_events, cea.comparator.hemorrhagic_stroke_events,
+            cea.comparator.tia_events, cea.comparator.hf_events,
+            cea.comparator.cv_deaths, cea.comparator.non_cv_deaths,
+            cea.comparator.ckd_4_events, cea.comparator.esrd_events,
+            cea.comparator.dementia_cases,
+        ],
+        "Difference": [
+            f"{currency}{cea.incremental_costs:,.0f}",
+            f"{cea.incremental_qalys:.3f}",
+            f"{cea.intervention.mean_life_years - cea.comparator.mean_life_years:.2f}",
+            cea.intervention.mi_events - cea.comparator.mi_events,
+            cea.intervention.stroke_events - cea.comparator.stroke_events,
+            cea.intervention.ischemic_stroke_events - cea.comparator.ischemic_stroke_events,
+            cea.intervention.hemorrhagic_stroke_events - cea.comparator.hemorrhagic_stroke_events,
+            cea.intervention.tia_events - cea.comparator.tia_events,
+            cea.intervention.hf_events - cea.comparator.hf_events,
+            cea.intervention.cv_deaths - cea.comparator.cv_deaths,
+            cea.intervention.non_cv_deaths - cea.comparator.non_cv_deaths,
+            cea.intervention.ckd_4_events - cea.comparator.ckd_4_events,
+            cea.intervention.esrd_events - cea.comparator.esrd_events,
+            cea.intervention.dementia_cases - cea.comparator.dementia_cases,
+        ],
+    }
+
+    df = pd.DataFrame(data)
+    st.dataframe(df, use_container_width=True, hide_index=True)
 
 
 def display_detailed_costs(cea: CEAResults, currency: str):
@@ -887,81 +1029,6 @@ def display_detailed_costs(cea: CEAResults, currency: str):
         st.dataframe(cost_data_spi, hide_index=True, use_container_width=True)
 
 
-def display_outcomes_table(cea: CEAResults, currency: str):
-    """Display outcomes comparison table."""
-    st.markdown("### Clinical Outcomes Comparison")
-
-    data = {
-        "Outcome": [
-            "Mean Total Costs",
-            "Mean QALYs",
-            "Mean Life Years",
-            "MI Events (per 1000)",
-            "Stroke Events (per 1000)",
-            "  - Ischemic Stroke",
-            "  - Hemorrhagic Stroke",
-            "TIA Events (per 1000)",
-            "Heart Failure Events",
-            "CV Deaths",
-            "Non-CV Deaths",
-            "CKD Stage 4 Progression",
-            "ESRD Events",
-            "Dementia Cases",
-        ],
-        "IXA-001": [
-            f"{currency}{cea.intervention.mean_costs:,.0f}",
-            f"{cea.intervention.mean_qalys:.3f}",
-            f"{cea.intervention.mean_life_years:.2f}",
-            cea.intervention.mi_events,
-            cea.intervention.stroke_events,
-            cea.intervention.ischemic_stroke_events,
-            cea.intervention.hemorrhagic_stroke_events,
-            cea.intervention.tia_events,
-            cea.intervention.hf_events,
-            cea.intervention.cv_deaths,
-            cea.intervention.non_cv_deaths,
-            cea.intervention.ckd_4_events,
-            cea.intervention.esrd_events,
-            cea.intervention.dementia_cases,
-        ],
-        "Spironolactone": [
-            f"{currency}{cea.comparator.mean_costs:,.0f}",
-            f"{cea.comparator.mean_qalys:.3f}",
-            f"{cea.comparator.mean_life_years:.2f}",
-            cea.comparator.mi_events,
-            cea.comparator.stroke_events,
-            cea.comparator.ischemic_stroke_events,
-            cea.comparator.hemorrhagic_stroke_events,
-            cea.comparator.tia_events,
-            cea.comparator.hf_events,
-            cea.comparator.cv_deaths,
-            cea.comparator.non_cv_deaths,
-            cea.comparator.ckd_4_events,
-            cea.comparator.esrd_events,
-            cea.comparator.dementia_cases,
-        ],
-        "Difference": [
-            f"{currency}{cea.incremental_costs:,.0f}",
-            f"{cea.incremental_qalys:.3f}",
-            f"{cea.intervention.mean_life_years - cea.comparator.mean_life_years:.2f}",
-            cea.intervention.mi_events - cea.comparator.mi_events,
-            cea.intervention.stroke_events - cea.comparator.stroke_events,
-            cea.intervention.ischemic_stroke_events - cea.comparator.ischemic_stroke_events,
-            cea.intervention.hemorrhagic_stroke_events - cea.comparator.hemorrhagic_stroke_events,
-            cea.intervention.tia_events - cea.comparator.tia_events,
-            cea.intervention.hf_events - cea.comparator.hf_events,
-            cea.intervention.cv_deaths - cea.comparator.cv_deaths,
-            cea.intervention.non_cv_deaths - cea.comparator.non_cv_deaths,
-            cea.intervention.ckd_4_events - cea.comparator.ckd_4_events,
-            cea.intervention.esrd_events - cea.comparator.esrd_events,
-            cea.intervention.dementia_cases - cea.comparator.dementia_cases,
-        ],
-    }
-
-    df = pd.DataFrame(data)
-    st.dataframe(df, use_container_width=True, hide_index=True)
-
-
 def display_medication_adherence(cea: CEAResults):
     """Display medication and adherence metrics."""
     st.markdown("### Medication & BP Control")
@@ -988,7 +1055,7 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
     """Display subgroup analysis results."""
     st.markdown("### Subgroup Analysis")
 
-    tab1, tab2, tab3, tab4 = st.tabs(["Framingham Risk", "KDIGO Risk", "GCUA Phenotype", "Age Group"])
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Framingham Risk", "KDIGO Risk", "GCUA Phenotype", "Age Group", "CKD Stage"])
 
     with tab1:
         st.markdown("**By Framingham CVD Risk Category**")
@@ -999,12 +1066,7 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
             if n > 0:
                 mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
                 mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
-                fram_data.append({
-                    'Category': cat,
-                    'N Patients': n,
-                    'Mean Costs': f"{currency}{mean_costs:,.0f}",
-                    'Mean QALYs': f"{mean_qalys:.3f}"
-                })
+                fram_data.append({'Category': cat, 'N': n, 'Mean Costs': f"{currency}{mean_costs:,.0f}", 'Mean QALYs': f"{mean_qalys:.3f}"})
         if fram_data:
             st.dataframe(pd.DataFrame(fram_data), hide_index=True, use_container_width=True)
         else:
@@ -1019,12 +1081,7 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
             if n > 0:
                 mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
                 mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
-                kdigo_data.append({
-                    'Risk Level': cat,
-                    'N Patients': n,
-                    'Mean Costs': f"{currency}{mean_costs:,.0f}",
-                    'Mean QALYs': f"{mean_qalys:.3f}"
-                })
+                kdigo_data.append({'Level': cat, 'N': n, 'Mean Costs': f"{currency}{mean_costs:,.0f}", 'Mean QALYs': f"{mean_qalys:.3f}"})
         if kdigo_data:
             st.dataframe(pd.DataFrame(kdigo_data), hide_index=True, use_container_width=True)
         else:
@@ -1033,27 +1090,18 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
     with tab3:
         st.markdown("**By GCUA Phenotype** (Age 60+, eGFR >60)")
         gcua_data = []
-        phenotype_names = {
-            'I': 'Accelerated Ager', 'II': 'Silent Renal',
-            'III': 'Vascular Dominant', 'IV': 'Senescent',
-            'Moderate': 'Moderate Risk', 'Low': 'Low Risk'
-        }
+        phenotype_names = {'I': 'Accelerated Ager', 'II': 'Silent Renal', 'III': 'Vascular Dominant', 'IV': 'Senescent', 'Moderate': 'Moderate', 'Low': 'Low'}
         for cat in ['I', 'II', 'III', 'IV', 'Moderate', 'Low']:
             patients = subgroup_data['gcua'][cat]
             n = len(patients)
             if n > 0:
                 mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
                 mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
-                gcua_data.append({
-                    'Phenotype': f"{cat} ({phenotype_names.get(cat, '')})",
-                    'N Patients': n,
-                    'Mean Costs': f"{currency}{mean_costs:,.0f}",
-                    'Mean QALYs': f"{mean_qalys:.3f}"
-                })
+                gcua_data.append({'Phenotype': f"{cat} ({phenotype_names.get(cat, '')})", 'N': n, 'Mean Costs': f"{currency}{mean_costs:,.0f}", 'Mean QALYs': f"{mean_qalys:.3f}"})
         if gcua_data:
             st.dataframe(pd.DataFrame(gcua_data), hide_index=True, use_container_width=True)
         else:
-            st.info("No GCUA phenotype data available (requires age 60+, eGFR >60)")
+            st.info("No GCUA phenotype data (requires age 60+, eGFR >60)")
 
     with tab4:
         st.markdown("**By Age Group**")
@@ -1064,69 +1112,28 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
             if n > 0:
                 mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
                 mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
-                age_data.append({
-                    'Age Group': cat,
-                    'N Patients': n,
-                    'Mean Costs': f"{currency}{mean_costs:,.0f}",
-                    'Mean QALYs': f"{mean_qalys:.3f}"
-                })
+                age_data.append({'Age': cat, 'N': n, 'Mean Costs': f"{currency}{mean_costs:,.0f}", 'Mean QALYs': f"{mean_qalys:.3f}"})
         if age_data:
             st.dataframe(pd.DataFrame(age_data), hide_index=True, use_container_width=True)
 
-
-def display_patient_trajectories(patients: List[Patient], results: SimulationResults):
-    """Display individual patient trajectory analysis."""
-    st.markdown("### Patient Trajectories")
-
-    if not results.patient_results:
-        st.warning("No individual patient data available")
-        return
-
-    # Sample of patient outcomes
-    sample_size = min(100, len(results.patient_results))
-    sample_data = results.patient_results[:sample_size]
-
-    # Create trajectory summary
-    trajectory_df = pd.DataFrame(sample_data)
-
-    if not trajectory_df.empty:
-        col1, col2 = st.columns(2)
-
-        with col1:
-            st.markdown("**Outcome Distribution (Sample)**")
-            if 'cumulative_costs' in trajectory_df.columns:
-                st.bar_chart(trajectory_df['cumulative_costs'].head(50))
-                st.caption("Cumulative Costs by Patient")
-
-        with col2:
-            if 'cumulative_qalys' in trajectory_df.columns:
-                st.bar_chart(trajectory_df['cumulative_qalys'].head(50))
-                st.caption("Cumulative QALYs by Patient")
-
-        # State distribution
-        st.markdown("**Final State Distribution**")
-        col3, col4 = st.columns(2)
-
-        with col3:
-            if 'cardiac_state' in trajectory_df.columns:
-                cardiac_counts = trajectory_df['cardiac_state'].value_counts()
-                st.dataframe(cardiac_counts.reset_index().rename(
-                    columns={'index': 'Cardiac State', 'cardiac_state': 'Count'}
-                ), hide_index=True)
-
-        with col4:
-            if 'renal_state' in trajectory_df.columns:
-                renal_counts = trajectory_df['renal_state'].value_counts()
-                st.dataframe(renal_counts.reset_index().rename(
-                    columns={'index': 'Renal State', 'renal_state': 'Count'}
-                ), hide_index=True)
+    with tab5:
+        st.markdown("**By CKD Stage**")
+        ckd_data = []
+        for cat in ['Stage 1-2', 'Stage 3a', 'Stage 3b', 'Stage 4', 'ESRD']:
+            patients = subgroup_data['ckd_stage'][cat]
+            n = len(patients)
+            if n > 0:
+                mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
+                mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
+                ckd_data.append({'Stage': cat, 'N': n, 'Mean Costs': f"{currency}{mean_costs:,.0f}", 'Mean QALYs': f"{mean_qalys:.3f}"})
+        if ckd_data:
+            st.dataframe(pd.DataFrame(ckd_data), hide_index=True, use_container_width=True)
 
 
 def display_risk_stratification(profiles: List[BaselineRiskProfile]):
     """Display baseline risk stratification summary."""
     st.markdown("### Baseline Risk Stratification")
 
-    # Count by category
     framingham_counts = {'Low': 0, 'Borderline': 0, 'Intermediate': 0, 'High': 0}
     kdigo_counts = {'Low': 0, 'Moderate': 0, 'High': 0, 'Very High': 0}
     gcua_counts = {'I': 0, 'II': 0, 'III': 0, 'IV': 0, 'Moderate': 0, 'Low': 0}
@@ -1143,28 +1150,19 @@ def display_risk_stratification(profiles: List[BaselineRiskProfile]):
 
     with col1:
         st.markdown("**Framingham CVD Risk**")
-        fram_df = pd.DataFrame([
-            {'Category': k, 'N': v, '%': f"{v/len(profiles)*100:.1f}%"}
-            for k, v in framingham_counts.items() if v > 0
-        ])
+        fram_df = pd.DataFrame([{'Category': k, 'N': v, '%': f"{v/len(profiles)*100:.1f}%"} for k, v in framingham_counts.items() if v > 0])
         if not fram_df.empty:
             st.dataframe(fram_df, hide_index=True)
 
     with col2:
         st.markdown("**KDIGO Risk Level**")
-        kdigo_df = pd.DataFrame([
-            {'Level': k, 'N': v, '%': f"{v/len(profiles)*100:.1f}%"}
-            for k, v in kdigo_counts.items() if v > 0
-        ])
+        kdigo_df = pd.DataFrame([{'Level': k, 'N': v, '%': f"{v/len(profiles)*100:.1f}%"} for k, v in kdigo_counts.items() if v > 0])
         if not kdigo_df.empty:
             st.dataframe(kdigo_df, hide_index=True)
 
     with col3:
         st.markdown("**GCUA Phenotype**")
-        gcua_df = pd.DataFrame([
-            {'Phenotype': k, 'N': v, '%': f"{v/len(profiles)*100:.1f}%"}
-            for k, v in gcua_counts.items() if v > 0
-        ])
+        gcua_df = pd.DataFrame([{'Phenotype': k, 'N': v, '%': f"{v/len(profiles)*100:.1f}%"} for k, v in gcua_counts.items() if v > 0])
         if not gcua_df.empty:
             st.dataframe(gcua_df, hide_index=True)
         else:
@@ -1180,49 +1178,27 @@ def display_event_charts(cea: CEAResults):
     with col1:
         cardiac_data = pd.DataFrame({
             "Event": ["MI", "Stroke", "TIA", "HF", "CV Death"],
-            "IXA-001": [
-                cea.intervention.mi_events,
-                cea.intervention.stroke_events,
-                cea.intervention.tia_events,
-                cea.intervention.hf_events,
-                cea.intervention.cv_deaths,
-            ],
-            "Spironolactone": [
-                cea.comparator.mi_events,
-                cea.comparator.stroke_events,
-                cea.comparator.tia_events,
-                cea.comparator.hf_events,
-                cea.comparator.cv_deaths,
-            ],
+            "IXA-001": [cea.intervention.mi_events, cea.intervention.stroke_events, cea.intervention.tia_events, cea.intervention.hf_events, cea.intervention.cv_deaths],
+            "Spironolactone": [cea.comparator.mi_events, cea.comparator.stroke_events, cea.comparator.tia_events, cea.comparator.hf_events, cea.comparator.cv_deaths],
         })
         st.bar_chart(cardiac_data.set_index("Event"), use_container_width=True)
         st.caption("Cardiac Events (per 1000 patients)")
 
     with col2:
         renal_data = pd.DataFrame({
-            "Event": ["CKD Stage 4", "ESRD"],
-            "IXA-001": [
-                cea.intervention.ckd_4_events,
-                cea.intervention.esrd_events,
-            ],
-            "Spironolactone": [
-                cea.comparator.ckd_4_events,
-                cea.comparator.esrd_events,
-            ],
+            "Event": ["CKD Stage 4", "ESRD", "Dementia"],
+            "IXA-001": [cea.intervention.ckd_4_events, cea.intervention.esrd_events, cea.intervention.dementia_cases],
+            "Spironolactone": [cea.comparator.ckd_4_events, cea.comparator.esrd_events, cea.comparator.dementia_cases],
         })
         st.bar_chart(renal_data.set_index("Event"), use_container_width=True)
-        st.caption("Renal Events (per 1000 patients)")
+        st.caption("Renal & Neuro Events (per 1000 patients)")
 
 
 def display_ce_plane(cea: CEAResults, currency: str):
     """Display cost-effectiveness plane."""
     st.markdown("### Cost-Effectiveness Plane")
 
-    chart_data = pd.DataFrame({
-        "Incremental QALYs": [cea.incremental_qalys],
-        "Incremental Costs": [cea.incremental_costs],
-    })
-
+    chart_data = pd.DataFrame({"Incremental QALYs": [cea.incremental_qalys], "Incremental Costs": [cea.incremental_costs]})
     st.scatter_chart(chart_data, x="Incremental QALYs", y="Incremental Costs", use_container_width=True)
 
     if cea.incremental_qalys > 0 and cea.incremental_costs < 0:
@@ -1260,6 +1236,49 @@ def display_wtp_analysis(cea: CEAResults, currency: str):
     st.dataframe(df, use_container_width=True, hide_index=True)
 
 
+def display_patient_trajectories(patients: List[Patient], results: SimulationResults):
+    """Display individual patient trajectory analysis."""
+    st.markdown("### Patient Trajectories")
+
+    if not results.patient_results:
+        st.warning("No individual patient data available")
+        return
+
+    sample_size = min(100, len(results.patient_results))
+    sample_data = results.patient_results[:sample_size]
+
+    trajectory_df = pd.DataFrame(sample_data)
+
+    if not trajectory_df.empty:
+        col1, col2 = st.columns(2)
+
+        with col1:
+            st.markdown("**Outcome Distribution (Sample)**")
+            if 'cumulative_costs' in trajectory_df.columns:
+                st.bar_chart(trajectory_df['cumulative_costs'].head(50))
+                st.caption("Cumulative Costs by Patient")
+
+        with col2:
+            if 'cumulative_qalys' in trajectory_df.columns:
+                st.bar_chart(trajectory_df['cumulative_qalys'].head(50))
+                st.caption("Cumulative QALYs by Patient")
+
+        st.markdown("**Final State Distribution**")
+        col3, col4 = st.columns(2)
+
+        with col3:
+            if 'cardiac_state' in trajectory_df.columns:
+                cardiac_counts = trajectory_df['cardiac_state'].value_counts()
+                st.dataframe(cardiac_counts.reset_index().rename(columns={'index': 'Cardiac State', 'cardiac_state': 'Count'}), hide_index=True)
+
+        with col4:
+            if 'renal_state' in trajectory_df.columns:
+                renal_counts = trajectory_df['renal_state'].value_counts()
+                st.dataframe(renal_counts.reset_index().rename(columns={'index': 'Renal State', 'renal_state': 'Count'}), hide_index=True)
+
+
+# ============== MAIN APPLICATION ==============
+
 def main():
     """Main application entry point."""
     # Header
@@ -1269,31 +1288,12 @@ def main():
     # ============== SIDEBAR ==============
     st.sidebar.markdown("## Simulation Parameters")
 
-    n_patients = st.sidebar.slider(
-        "Cohort Size (per arm)", min_value=100, max_value=5000, value=1000, step=100,
-        help="Number of patients to simulate in each treatment arm"
-    )
-
-    time_horizon = st.sidebar.slider(
-        "Time Horizon (years)", min_value=5, max_value=50, value=40, step=5,
-        help="Duration of the simulation"
-    )
-
-    perspective = st.sidebar.selectbox(
-        "Cost Perspective", options=["US", "UK"], index=0,
-        help="Healthcare system perspective for costs"
-    )
+    n_patients = st.sidebar.slider("Cohort Size (per arm)", min_value=100, max_value=5000, value=1000, step=100)
+    time_horizon = st.sidebar.slider("Time Horizon (years)", min_value=5, max_value=50, value=40, step=5)
+    perspective = st.sidebar.selectbox("Cost Perspective", options=["US", "UK"], index=0)
     currency = "$" if perspective == "US" else "£"
-
-    discount_rate = st.sidebar.slider(
-        "Discount Rate (%)", min_value=0.0, max_value=10.0, value=3.0, step=0.5,
-        help="Annual discount rate for costs and QALYs"
-    ) / 100.0
-
-    seed = st.sidebar.number_input(
-        "Random Seed", min_value=1, max_value=99999, value=42,
-        help="Seed for reproducibility"
-    )
+    discount_rate = st.sidebar.slider("Discount Rate (%)", min_value=0.0, max_value=10.0, value=3.0, step=0.5) / 100.0
+    seed = st.sidebar.number_input("Random Seed", min_value=1, max_value=99999, value=42)
 
     st.sidebar.markdown("---")
     st.sidebar.markdown("## Population Configuration")
@@ -1302,57 +1302,234 @@ def main():
     with st.sidebar.expander("Demographics", expanded=False):
         age_mean = st.slider("Mean Age (years)", 40, 80, 62)
         age_sd = st.slider("Age SD", 5, 20, 10)
+        age_min = st.slider("Age Min", 30, 60, 40)
+        age_max = st.slider("Age Max", 70, 95, 85)
         prop_male = st.slider("% Male", 0, 100, 55) / 100.0
         bmi_mean = st.slider("Mean BMI", 20.0, 45.0, 30.5, step=0.5)
+        bmi_sd = st.slider("BMI SD", 2.0, 10.0, 5.5, step=0.5)
 
-    # Clinical Parameters
-    with st.sidebar.expander("Clinical Parameters", expanded=False):
-        st.markdown("**Blood Pressure**")
+    # Blood Pressure
+    with st.sidebar.expander("Blood Pressure", expanded=False):
         sbp_mean = st.slider("Mean SBP (mmHg)", 140, 180, 155)
         sbp_sd = st.slider("SBP SD", 5, 25, 15)
+        sbp_min = st.slider("SBP Min", 120, 150, 140)
+        sbp_max = st.slider("SBP Max", 180, 220, 200)
+        dbp_mean = st.slider("Mean DBP (mmHg)", 70, 110, 92)
+        dbp_sd = st.slider("DBP SD", 5, 20, 10)
 
-        st.markdown("**Renal Function**")
+    # Renal Function
+    with st.sidebar.expander("Renal Function", expanded=False):
         egfr_mean = st.slider("Mean eGFR", 30, 90, 68)
         egfr_sd = st.slider("eGFR SD", 10, 30, 20)
+        egfr_min = st.slider("eGFR Min", 10, 30, 15)
+        egfr_max = st.slider("eGFR Max", 90, 130, 120)
         uacr_mean = st.slider("Mean UACR (mg/g)", 10, 300, 50)
+        uacr_sd = st.slider("UACR SD", 20, 150, 80)
 
-        st.markdown("**Lipids**")
+    # Lipids
+    with st.sidebar.expander("Lipids", expanded=False):
         total_chol_mean = st.slider("Mean Total Cholesterol", 150, 280, 200)
+        total_chol_sd = st.slider("Total Cholesterol SD", 20, 60, 40)
         hdl_chol_mean = st.slider("Mean HDL Cholesterol", 30, 80, 48)
+        hdl_chol_sd = st.slider("HDL Cholesterol SD", 5, 20, 12)
 
-    # Cardiac History
-    with st.sidebar.expander("Cardiac History (%)", expanded=False):
+    # Standard Comorbidities
+    with st.sidebar.expander("Standard Comorbidities (%)", expanded=False):
+        diabetes_prev = st.slider("Diabetes", 0, 60, 35) / 100.0
+        smoker_prev = st.slider("Current Smoker", 0, 40, 15) / 100.0
+        dyslipidemia_prev = st.slider("Dyslipidemia", 0, 80, 60) / 100.0
         prior_mi_prev = st.slider("Prior MI", 0, 30, 10) / 100.0
         prior_stroke_prev = st.slider("Prior Stroke", 0, 20, 5) / 100.0
         heart_failure_prev = st.slider("Heart Failure", 0, 25, 8) / 100.0
 
-    # Comorbidities
-    with st.sidebar.expander("Comorbidities (%)", expanded=False):
-        diabetes_prev = st.slider("Diabetes", 0, 60, 35) / 100.0
-        smoker_prev = st.slider("Current Smoker", 0, 40, 15) / 100.0
-        dyslipidemia_prev = st.slider("Dyslipidemia", 0, 80, 60) / 100.0
+    # Additional Comorbidities (NEW)
+    with st.sidebar.expander("Additional Comorbidities (%)", expanded=False):
+        st.caption("These conditions affect model dynamics")
+        copd_prev = st.slider("COPD", 0, 40, 17) / 100.0
+        depression_prev = st.slider("Depression", 0, 50, 27) / 100.0
+        anxiety_prev = st.slider("Anxiety", 0, 40, 17) / 100.0
+        substance_use_prev = st.slider("Substance Use Disorder", 0, 25, 10) / 100.0
+        smi_prev = st.slider("Serious Mental Illness", 0, 15, 4) / 100.0
+        afib_prev = st.slider("Atrial Fibrillation", 0, 25, 10) / 100.0
+        pad_prev = st.slider("Peripheral Artery Disease", 0, 30, 15) / 100.0
 
     # Treatment & Adherence
     with st.sidebar.expander("Treatment & Adherence", expanded=False):
-        adherence_prob = st.slider("Treatment Adherence (%)", 50, 100, 75) / 100.0
+        adherence_prob = st.slider("Baseline Adherence (%)", 50, 100, 75) / 100.0
         mean_antihypertensives = st.slider("Mean Antihypertensives", 2, 6, 4)
+        sglt2_uptake = st.slider("SGLT2i Uptake (%)", 0, 80, 40) / 100.0
+
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("## Advanced Parameters")
+
+    # Treatment Effects
+    with st.sidebar.expander("Treatment Effects", expanded=False):
+        st.markdown("**IXA-001**")
+        ixa_sbp_reduction = st.slider("IXA-001 SBP Reduction (mmHg)", 10.0, 30.0, 20.0, step=1.0)
+        ixa_sbp_sd = st.slider("IXA-001 SBP SD", 4.0, 12.0, 8.0, step=1.0)
+        ixa_discontinuation = st.slider("IXA-001 Discontinuation (%/yr)", 5, 25, 12) / 100.0
+
+        st.markdown("**Spironolactone**")
+        spiro_sbp_reduction = st.slider("Spiro SBP Reduction (mmHg)", 5.0, 15.0, 9.0, step=1.0)
+        spiro_sbp_sd = st.slider("Spiro SBP SD", 3.0, 10.0, 6.0, step=1.0)
+        spiro_discontinuation = st.slider("Spiro Discontinuation (%/yr)", 10, 30, 15) / 100.0
+
+        st.markdown("**Adherence Effect**")
+        adherence_multiplier = st.slider("Non-Adherent Effect Multiplier", 0.1, 0.5, 0.3, step=0.05)
+
+    # Clinical Parameters
+    with st.sidebar.expander("Clinical Model Parameters", expanded=False):
+        st.markdown("**Case Fatality Rates (30-day)**")
+        cfr_mi = st.slider("MI CFR (%)", 2, 15, 8) / 100.0
+        cfr_ischemic_stroke = st.slider("Ischemic Stroke CFR (%)", 5, 20, 10) / 100.0
+        cfr_hemorrhagic_stroke = st.slider("Hemorrhagic Stroke CFR (%)", 15, 40, 25) / 100.0
+        cfr_hf = st.slider("HF CFR (%)", 2, 12, 5) / 100.0
+
+        st.markdown("**Stroke Distribution**")
+        stroke_ischemic_frac = st.slider("Ischemic Stroke %", 70, 95, 85) / 100.0
+
+        st.markdown("**Prior Event Risk Multipliers**")
+        prior_mi_mult = st.slider("Prior MI Multiplier", 1.5, 4.0, 2.5, step=0.5)
+        prior_stroke_mult = st.slider("Prior Stroke Multiplier", 2.0, 5.0, 3.0, step=0.5)
+
+        st.markdown("**Cognitive Decline (Annual Rates)**")
+        normal_to_mci = st.slider("Normal to MCI (%)", 1, 5, 2) / 100.0
+        mci_to_dementia = st.slider("MCI to Dementia (%)", 5, 20, 10) / 100.0
+
+        st.markdown("**Safety Monitoring**")
+        hyperkalemia_threshold = st.slider("Hyperkalemia Threshold (K+)", 5.0, 6.5, 5.5, step=0.1)
+
+    # Cost Parameters
+    with st.sidebar.expander("Drug Costs (Monthly)", expanded=False):
+        ixa_monthly_cost = st.number_input("IXA-001", value=500.0 if perspective == "US" else 400.0, step=50.0)
+        spiro_monthly_cost = st.number_input("Spironolactone", value=15.0 if perspective == "US" else 8.0, step=5.0)
+        sglt2_monthly_cost = st.number_input("SGLT2 Inhibitor", value=450.0 if perspective == "US" else 35.0, step=25.0)
+        background_monthly_cost = st.number_input("Background Therapy", value=75.0 if perspective == "US" else 40.0, step=10.0)
+        lab_cost_k = st.number_input("K+ Lab Test", value=15.0 if perspective == "US" else 3.0, step=5.0)
+
+    with st.sidebar.expander("Acute Event Costs", expanded=False):
+        mi_acute_cost = st.number_input("MI (Acute)", value=25000.0 if perspective == "US" else 8000.0, step=1000.0)
+        ischemic_stroke_cost = st.number_input("Ischemic Stroke", value=15200.0 if perspective == "US" else 6000.0, step=500.0)
+        hemorrhagic_stroke_cost = st.number_input("Hemorrhagic Stroke", value=22500.0 if perspective == "US" else 9000.0, step=500.0)
+        tia_cost = st.number_input("TIA", value=2100.0 if perspective == "US" else 850.0, step=100.0)
+        hf_admission_cost = st.number_input("HF Admission", value=18000.0 if perspective == "US" else 5500.0, step=1000.0)
+
+    with st.sidebar.expander("Annual Management Costs", expanded=False):
+        controlled_htn_annual = st.number_input("Controlled HTN", value=800.0 if perspective == "US" else 350.0, step=100.0)
+        uncontrolled_htn_annual = st.number_input("Uncontrolled HTN", value=1200.0 if perspective == "US" else 550.0, step=100.0)
+        post_mi_annual = st.number_input("Post-MI", value=5500.0 if perspective == "US" else 2200.0, step=500.0)
+        post_stroke_annual = st.number_input("Post-Stroke", value=12000.0 if perspective == "US" else 5500.0, step=500.0)
+        hf_annual = st.number_input("Heart Failure", value=15000.0 if perspective == "US" else 6000.0, step=1000.0)
+        ckd_3a_annual = st.number_input("CKD Stage 3a", value=2500.0 if perspective == "US" else 1200.0, step=250.0)
+        ckd_3b_annual = st.number_input("CKD Stage 3b", value=4500.0 if perspective == "US" else 2200.0, step=250.0)
+        ckd_4_annual = st.number_input("CKD Stage 4", value=8000.0 if perspective == "US" else 3500.0, step=500.0)
+        esrd_annual = st.number_input("ESRD", value=90000.0 if perspective == "US" else 35000.0, step=5000.0)
+
+    with st.sidebar.expander("Indirect Costs (Productivity)", expanded=False):
+        daily_wage = st.number_input("Daily Wage", value=240.0 if perspective == "US" else 160.0, step=20.0)
+        absenteeism_mi = st.number_input("Absenteeism MI (days)", value=7 if perspective == "US" else 14, step=1)
+        absenteeism_stroke = st.number_input("Absenteeism Stroke (days)", value=30 if perspective == "US" else 60, step=5)
+        absenteeism_hf = st.number_input("Absenteeism HF (days)", value=5 if perspective == "US" else 10, step=1)
+        disability_stroke = st.slider("Disability Multiplier Stroke (%)", 10, 50, 20 if perspective == "US" else 30) / 100.0
+        disability_hf = st.slider("Disability Multiplier HF (%)", 5, 35, 15 if perspective == "US" else 20) / 100.0
+
+    # Utility Parameters
+    with st.sidebar.expander("Utility/QALY Parameters", expanded=False):
+        st.markdown("**Baseline Utilities by Age**")
+        util_40 = st.slider("Age 40 Utility", 0.70, 1.0, 0.90, step=0.01)
+        util_60 = st.slider("Age 60 Utility", 0.65, 0.95, 0.84, step=0.01)
+        util_80 = st.slider("Age 80 Utility", 0.55, 0.90, 0.75, step=0.01)
+
+        st.markdown("**Disutilities (Decrements)**")
+        disutil_uncontrolled = st.slider("Uncontrolled HTN", 0.0, 0.10, 0.04, step=0.01)
+        disutil_post_mi = st.slider("Post-MI", 0.05, 0.25, 0.12, step=0.01)
+        disutil_post_stroke = st.slider("Post-Stroke", 0.10, 0.35, 0.18, step=0.01)
+        disutil_esrd = st.slider("ESRD", 0.20, 0.50, 0.35, step=0.01)
+        disutil_diabetes = st.slider("Diabetes", 0.0, 0.10, 0.04, step=0.01)
 
     # Build population params
     pop_params = PopulationParams(
         n_patients=n_patients, seed=seed,
-        age_mean=age_mean, age_sd=age_sd,
+        age_mean=age_mean, age_sd=age_sd, age_min=age_min, age_max=age_max,
         prop_male=prop_male,
-        sbp_mean=sbp_mean, sbp_sd=sbp_sd,
-        egfr_mean=egfr_mean, egfr_sd=egfr_sd,
-        uacr_mean=uacr_mean, uacr_sd=80.0,
-        total_chol_mean=total_chol_mean, hdl_chol_mean=hdl_chol_mean,
-        bmi_mean=bmi_mean, bmi_sd=5.5,
+        sbp_mean=sbp_mean, sbp_sd=sbp_sd, sbp_min=sbp_min, sbp_max=sbp_max,
+        dbp_mean=dbp_mean, dbp_sd=dbp_sd,
+        egfr_mean=egfr_mean, egfr_sd=egfr_sd, egfr_min=egfr_min, egfr_max=egfr_max,
+        uacr_mean=uacr_mean, uacr_sd=uacr_sd,
+        total_chol_mean=total_chol_mean, total_chol_sd=total_chol_sd,
+        hdl_chol_mean=hdl_chol_mean, hdl_chol_sd=hdl_chol_sd,
+        bmi_mean=bmi_mean, bmi_sd=bmi_sd,
         diabetes_prev=diabetes_prev, smoker_prev=smoker_prev,
         dyslipidemia_prev=dyslipidemia_prev,
         prior_mi_prev=prior_mi_prev, prior_stroke_prev=prior_stroke_prev,
         heart_failure_prev=heart_failure_prev,
         adherence_prob=adherence_prob,
         mean_antihypertensives=mean_antihypertensives,
+    )
+
+    # Build treatment params
+    treatment_params = TreatmentParams(
+        ixa_sbp_reduction=ixa_sbp_reduction,
+        ixa_sbp_reduction_sd=ixa_sbp_sd,
+        ixa_discontinuation_rate=ixa_discontinuation,
+        spiro_sbp_reduction=spiro_sbp_reduction,
+        spiro_sbp_reduction_sd=spiro_sbp_sd,
+        spiro_discontinuation_rate=spiro_discontinuation,
+        adherence_effect_multiplier=adherence_multiplier,
+    )
+
+    # Build clinical params
+    clinical_params = ClinicalParams(
+        cfr_mi=cfr_mi,
+        cfr_ischemic_stroke=cfr_ischemic_stroke,
+        cfr_hemorrhagic_stroke=cfr_hemorrhagic_stroke,
+        cfr_hf=cfr_hf,
+        stroke_ischemic_fraction=stroke_ischemic_frac,
+        prior_mi_multiplier=prior_mi_mult,
+        prior_stroke_multiplier=prior_stroke_mult,
+        normal_to_mci_rate=normal_to_mci,
+        mci_to_dementia_rate=mci_to_dementia,
+    )
+
+    # Build custom costs
+    custom_costs = CustomCostInputs(
+        ixa_001_monthly=ixa_monthly_cost,
+        spironolactone_monthly=spiro_monthly_cost,
+        sglt2_inhibitor_monthly=sglt2_monthly_cost,
+        background_therapy_monthly=background_monthly_cost,
+        lab_test_cost_k=lab_cost_k,
+        mi_acute=mi_acute_cost,
+        ischemic_stroke_acute=ischemic_stroke_cost,
+        hemorrhagic_stroke_acute=hemorrhagic_stroke_cost,
+        tia_acute=tia_cost,
+        hf_admission=hf_admission_cost,
+        controlled_htn_annual=controlled_htn_annual,
+        uncontrolled_htn_annual=uncontrolled_htn_annual,
+        post_mi_annual=post_mi_annual,
+        post_stroke_annual=post_stroke_annual,
+        heart_failure_annual=hf_annual,
+        ckd_stage_3a_annual=ckd_3a_annual,
+        ckd_stage_3b_annual=ckd_3b_annual,
+        ckd_stage_4_annual=ckd_4_annual,
+        esrd_annual=esrd_annual,
+        daily_wage=daily_wage,
+        absenteeism_mi_days=absenteeism_mi,
+        absenteeism_stroke_days=absenteeism_stroke,
+        absenteeism_hf_days=absenteeism_hf,
+        disability_multiplier_stroke=disability_stroke,
+        disability_multiplier_hf=disability_hf,
+    )
+
+    # Build utility params
+    utility_params = UtilityParams(
+        baseline_utility_40=util_40,
+        baseline_utility_60=util_60,
+        baseline_utility_80=util_80,
+        disutility_uncontrolled_htn=disutil_uncontrolled,
+        disutility_post_mi=disutil_post_mi,
+        disutility_post_stroke=disutil_post_stroke,
+        disutility_esrd=disutil_esrd,
+        disutility_diabetes=disutil_diabetes,
     )
 
     st.sidebar.markdown("---")
@@ -1362,19 +1539,20 @@ def main():
     **IXA-001** (aldosterone synthase inhibitor) compared to
     **Spironolactone** in adults with resistant hypertension.
 
-    **Outcomes modeled:**
-    - Cardiovascular events (MI, stroke, HF)
-    - Renal progression (CKD, ESRD)
-    - Cognitive decline (MCI, Dementia)
-    - Mortality (CV and non-CV)
-    - Quality-adjusted life years (QALYs)
+    **All model parameters are now configurable** including:
+    - Population demographics & comorbidities
+    - Treatment effects & discontinuation
+    - Clinical event rates & fatality
+    - All cost parameters
+    - Utility/QALY values
     """)
 
     # Run simulation button
     if st.sidebar.button("Run Simulation", type="primary", use_container_width=True):
         with st.status(f"Running microsimulation ({n_patients:,} patients per arm, {time_horizon} years)...", expanded=True) as status:
             cea_results, patients_ixa, patients_spi, profiles = run_simulation_with_progress(
-                n_patients, time_horizon, perspective, seed, discount_rate, pop_params, status
+                n_patients, time_horizon, perspective, seed, discount_rate, pop_params, status,
+                custom_costs, treatment_params, clinical_params
             )
             st.session_state.cea_results = cea_results
             st.session_state.currency = currency
@@ -1382,6 +1560,9 @@ def main():
             st.session_state.patients_ixa = patients_ixa
             st.session_state.profiles = profiles
             st.session_state.subgroup_data = analyze_subgroups(patients_ixa, cea_results.intervention, profiles)
+            st.session_state.custom_costs = custom_costs
+            st.session_state.treatment_params = treatment_params
+            st.session_state.clinical_params = clinical_params
 
     # ============== MAIN CONTENT ==============
     if "cea_results" in st.session_state:
@@ -1390,6 +1571,9 @@ def main():
         pp = st.session_state.pop_params
         profiles = st.session_state.profiles
         subgroup_data = st.session_state.subgroup_data
+        custom_costs = st.session_state.get('custom_costs')
+        treatment_params = st.session_state.get('treatment_params')
+        clinical_params = st.session_state.get('clinical_params')
 
         # Key metrics
         display_key_metrics(cea, currency)
@@ -1398,13 +1582,7 @@ def main():
 
         # Tabs for different views
         tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-            "📊 Outcomes",
-            "💰 Costs",
-            "📈 Charts",
-            "🎯 Subgroups",
-            "🔬 Risk Stratification",
-            "👤 Trajectories",
-            "📥 Export"
+            "Outcomes", "Costs", "Charts", "Subgroups", "Risk Stratification", "Trajectories", "Export"
         ])
 
         with tab1:
@@ -1433,9 +1611,9 @@ def main():
 
         with tab7:
             st.markdown("### Export Results")
-            st.markdown("Download comprehensive Excel report with all analysis results.")
+            st.markdown("Download comprehensive Excel report with all analysis results and parameters used.")
 
-            excel_buffer = generate_excel_report(cea, pp, subgroup_data, currency)
+            excel_buffer = generate_excel_report(cea, pp, subgroup_data, currency, custom_costs, treatment_params, clinical_params)
             st.download_button(
                 label="Download Excel Report",
                 data=excel_buffer,
@@ -1446,11 +1624,12 @@ def main():
 
             st.markdown("""
             **Report Contents:**
-            - Executive Summary
-            - Detailed Outcomes (Direct/Indirect Costs, Events)
-            - Subgroup Analysis (Framingham, KDIGO, GCUA, Age)
+            - Executive Summary with key results
+            - Clinical Events comparison with charts
+            - Cost Analysis (direct & indirect)
+            - Subgroup Analysis by risk categories
             - Willingness-to-Pay Analysis
-            - Population Parameters
+            - All Simulation Parameters used
             """)
 
         # Summary box
@@ -1476,8 +1655,6 @@ def main():
             - Mean SBP: {pp.sbp_mean:.0f} mmHg
             - Mean eGFR: {pp.egfr_mean:.0f} mL/min
             - Diabetes: {pp.diabetes_prev*100:.0f}%
-            - Prior MI: {pp.prior_mi_prev*100:.0f}%
-            - Heart Failure: {pp.heart_failure_prev*100:.0f}%
             """)
 
         with col3:
@@ -1493,7 +1670,7 @@ def main():
             """)
 
     else:
-        st.info("👈 Configure parameters and click **Run Simulation** to start the analysis.")
+        st.info("Configure parameters and click **Run Simulation** to start the analysis.")
 
 
 if __name__ == "__main__":
