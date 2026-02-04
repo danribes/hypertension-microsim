@@ -67,42 +67,55 @@ def format_currency(value: float, symbol: str = "$") -> str:
         return f"{symbol}{value:,.0f}"
 
 
-def run_simulation_with_params(
+def run_simulation_with_progress(
     n_patients: int,
     time_horizon: int,
     perspective: str,
     seed: int,
     discount_rate: float,
-    pop_params: PopulationParams
+    pop_params: PopulationParams,
+    status_container
 ) -> tuple:
-    """Run the CEA simulation with custom population parameters."""
+    """Run the CEA simulation with progress indicators."""
+    import time
 
     # Update population params
     pop_params.n_patients = n_patients
     pop_params.seed = seed
 
+    total_cycles = time_horizon * 12  # Monthly cycles
+
     # Create simulation config
     config = SimulationConfig(
         n_patients=n_patients,
-        time_horizon_months=time_horizon * 12,
+        time_horizon_months=total_cycles,
         seed=seed,
         cost_perspective=perspective,
         discount_rate=discount_rate,
         show_progress=False
     )
 
-    sim = Simulation(config)
-
-    # Generate population for IXA-001 arm
+    # ===== Phase 1: Generate IXA-001 Population =====
+    status_container.update(label="Phase 1/5: Generating IXA-001 population...", state="running")
     generator = PopulationGenerator(pop_params)
     patients_ixa = generator.generate()
-
-    # Store baseline risk profiles before simulation
     baseline_profiles_ixa = [p.baseline_risk_profile for p in patients_ixa]
 
-    results_ixa = sim.run(patients_ixa, Treatment.IXA_001)
+    # ===== Phase 2: Run IXA-001 Simulation =====
+    status_container.update(label="Phase 2/5: Simulating IXA-001 arm...", state="running")
+    progress_bar = status_container.progress(0, text="Initializing simulation...")
 
-    # Regenerate for comparator arm with same seed
+    sim = Simulation(config)
+
+    # Run simulation with progress updates
+    results_ixa = _run_simulation_with_callback(
+        sim, patients_ixa, Treatment.IXA_001, total_cycles, progress_bar, "IXA-001"
+    )
+
+    # ===== Phase 3: Generate Spironolactone Population =====
+    status_container.update(label="Phase 3/5: Generating Spironolactone population...", state="running")
+    progress_bar.progress(0, text="Generating comparator population...")
+
     pop_params_comp = PopulationParams(
         n_patients=n_patients, seed=seed,
         age_mean=pop_params.age_mean, age_sd=pop_params.age_sd,
@@ -122,12 +135,129 @@ def run_simulation_with_params(
     patients_spi = generator_comp.generate()
     baseline_profiles_spi = [p.baseline_risk_profile for p in patients_spi]
 
-    results_spi = sim.run(patients_spi, Treatment.SPIRONOLACTONE)
+    # ===== Phase 4: Run Spironolactone Simulation =====
+    status_container.update(label="Phase 4/5: Simulating Spironolactone arm...", state="running")
+    progress_bar.progress(0, text="Initializing comparator simulation...")
+
+    results_spi = _run_simulation_with_callback(
+        sim, patients_spi, Treatment.SPIRONOLACTONE, total_cycles, progress_bar, "Spironolactone"
+    )
+
+    # ===== Phase 5: Calculate Results =====
+    status_container.update(label="Phase 5/5: Calculating cost-effectiveness...", state="running")
+    progress_bar.progress(100, text="Computing ICER and outcomes...")
 
     cea = CEAResults(intervention=results_ixa, comparator=results_spi)
     cea.calculate_icer()
 
+    status_container.update(label="Simulation complete!", state="complete")
+
     return cea, patients_ixa, patients_spi, baseline_profiles_ixa
+
+
+def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progress_bar, arm_name):
+    """Run simulation with progress updates."""
+    from src.patient import Treatment as TreatmentEnum
+
+    results = SimulationResults(treatment=treatment, n_patients=len(patients))
+
+    # Assign treatment to all patients
+    for patient in patients:
+        sim.treatment_mgr.assign_treatment(patient, treatment)
+        if patient.on_sglt2_inhibitor:
+            results.sglt2_users += 1
+
+    n_cycles = int(sim.config.time_horizon_months / sim.config.cycle_length_months)
+    update_interval = max(1, n_cycles // 20)  # Update progress ~20 times
+
+    for cycle in range(n_cycles):
+        # Update progress bar periodically
+        if cycle % update_interval == 0:
+            progress_pct = int((cycle / n_cycles) * 100)
+            years_simulated = cycle / 12
+            progress_bar.progress(
+                progress_pct,
+                text=f"Simulating {arm_name}: Year {years_simulated:.1f}/{sim.config.time_horizon_months/12:.0f} ({progress_pct}%)"
+            )
+
+        for patient in patients:
+            if not patient.is_alive:
+                continue
+
+            # Check adherence
+            if sim.adherence_transition.check_adherence_change(patient):
+                sim.treatment_mgr.update_effect_for_adherence(patient)
+
+            # Safety checks for Spironolactone
+            is_quarterly = (int(patient.time_in_simulation) % 3 == 0)
+            if is_quarterly and patient.treatment == TreatmentEnum.SPIRONOLACTONE:
+                patient.accrue_costs(sim.costs.lab_test_cost_k)
+                if sim.treatment_mgr.check_safety_stop_rules(patient):
+                    sim.treatment_mgr.assign_treatment(patient, TreatmentEnum.STANDARD_CARE)
+                    patient.hyperkalemia_history += 1
+
+            # Neuro progression
+            old_neuro = patient.neuro_state
+            sim.neuro_transition.check_neuro_progression(patient)
+            if patient.neuro_state != old_neuro and patient.neuro_state.value == "dementia":
+                results.dementia_cases += 1
+
+            # Cardiac events
+            probs = sim.transition_calc.calculate_transitions(patient)
+            new_event = sim.transition_calc.sample_event(patient, probs)
+
+            if new_event:
+                if new_event == "NON_CV_DEATH":
+                    results.non_cv_deaths += 1
+                    patient.cardiac_state = "non_cv_death"
+                else:
+                    sim._record_event(new_event, results)
+                    patient.transition_cardiac(new_event)
+
+                    from src.costs.costs import get_event_cost, get_acute_absenteeism_cost
+                    event_cost = get_event_cost(new_event.value, sim.costs)
+                    absenteeism_cost = get_acute_absenteeism_cost(new_event.value, sim.costs, patient.age)
+
+                    years = patient.time_in_simulation / 12
+                    discount = 1 / ((1 + sim.config.discount_rate) ** years)
+
+                    patient.accrue_costs(event_cost * discount)
+                    results.total_costs += event_cost * discount
+                    results.total_indirect_costs += absenteeism_cost * discount
+
+            if not patient.is_alive:
+                continue
+
+            # Accrue outcomes
+            sim._accrue_outcomes(patient, results)
+
+            # Update SBP
+            patient.update_sbp(patient._treatment_effect_mmhg, sim.rng)
+
+            # Advance time and check renal
+            old_renal = patient.renal_state
+            patient.advance_time(sim.config.cycle_length_months)
+
+            from src.patient import RenalState
+            if patient.renal_state != old_renal:
+                if patient.renal_state == RenalState.ESRD:
+                    results.esrd_events += 1
+                elif patient.renal_state == RenalState.CKD_STAGE_4:
+                    results.ckd_4_events += 1
+
+            # Check discontinuation
+            if sim.treatment_mgr.check_discontinuation(patient):
+                patient.treatment = TreatmentEnum.STANDARD_CARE
+
+    # Final progress update
+    progress_bar.progress(100, text=f"{arm_name} simulation complete!")
+
+    # Store patient results
+    for patient in patients:
+        results.patient_results.append(patient.to_dict())
+
+    results.calculate_means()
+    return results
 
 
 def analyze_subgroups(patients: List[Patient], results: SimulationResults, profiles: List[BaselineRiskProfile]) -> Dict:
@@ -1242,9 +1372,9 @@ def main():
 
     # Run simulation button
     if st.sidebar.button("Run Simulation", type="primary", use_container_width=True):
-        with st.spinner(f"Running microsimulation ({n_patients:,} patients per arm, {time_horizon} years)..."):
-            cea_results, patients_ixa, patients_spi, profiles = run_simulation_with_params(
-                n_patients, time_horizon, perspective, seed, discount_rate, pop_params
+        with st.status(f"Running microsimulation ({n_patients:,} patients per arm, {time_horizon} years)...", expanded=True) as status:
+            cea_results, patients_ixa, patients_spi, profiles = run_simulation_with_progress(
+                n_patients, time_horizon, perspective, seed, discount_rate, pop_params, status
             )
             st.session_state.cea_results = cea_results
             st.session_state.currency = currency
