@@ -8,6 +8,7 @@ from typing import Optional
 import numpy as np
 
 from .patient import Patient, Treatment
+from .risk_assessment import BaselineRiskProfile
 
 
 @dataclass
@@ -55,36 +56,44 @@ class TreatmentManager:
     def assign_treatment(self, patient: Patient, treatment: Treatment) -> float:
         """
         Assign treatment and return individual SBP reduction.
-        
+
         Args:
             patient: Patient to treat
             treatment: Treatment to assign
-            
+
         Returns:
             Individual SBP reduction (mmHg)
         """
         effect = TREATMENT_EFFECTS[treatment]
-        
+
         # Sample individual treatment response
         sbp_reduction = self.rng.normal(
-            effect.sbp_reduction, 
+            effect.sbp_reduction,
             effect.sbp_reduction_sd
         )
         sbp_reduction = max(0, sbp_reduction)  # No negative effect
-        
+
+        # Apply primary aldosteronism treatment response modifier
+        # PA patients have enhanced response to aldosterone-targeting therapies
+        if hasattr(patient, 'baseline_risk_profile') and patient.baseline_risk_profile is not None:
+            treatment_modifier = patient.baseline_risk_profile.get_treatment_response_modifier(
+                treatment.value.upper()
+            )
+            sbp_reduction *= treatment_modifier
+
         # Store base effect (unpenalized)
         patient._base_treatment_effect = sbp_reduction
-        
+
         # Apply adherence modifier
         if not patient.is_adherent:
             sbp_reduction *= 0.3  # 70% reduction in effect
-        
+
         # Apply to patient
         patient.apply_treatment_effect(treatment, sbp_reduction)
-        
+
         # Store for monthly updates
         patient._treatment_effect_mmhg = sbp_reduction
-        
+
         return sbp_reduction
         
     def update_effect_for_adherence(self, patient: Patient):
