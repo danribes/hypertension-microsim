@@ -105,18 +105,26 @@ class TransitionCalculator:
         risk_sbp = getattr(patient, 'true_mean_sbp', patient.current_sbp)
 
         # Get monthly event probabilities from PREVENT
-        probs.to_mi = self.risk_calc.get_monthly_event_prob(
+        base_mi_prob = self.risk_calc.get_monthly_event_prob(
             patient.age, patient.sex.value, risk_sbp, patient.egfr,
             RiskOutcome.MI, patient.has_diabetes, patient.is_smoker,
             patient.total_cholesterol, patient.hdl_cholesterol, patient.bmi, mi_mult
         )
 
+        # Apply baseline risk phenotype modifier for MI
+        mi_phenotype_mod = patient.baseline_risk_profile.get_dynamic_modifier("MI")
+        probs.to_mi = base_mi_prob * mi_phenotype_mod
+
         # Total stroke probability from PREVENT
-        total_stroke_prob = self.risk_calc.get_monthly_event_prob(
+        base_stroke_prob = self.risk_calc.get_monthly_event_prob(
             patient.age, patient.sex.value, risk_sbp, patient.egfr,
             RiskOutcome.STROKE, patient.has_diabetes, patient.is_smoker,
             patient.total_cholesterol, patient.hdl_cholesterol, patient.bmi, stroke_mult
         )
+
+        # Apply baseline risk phenotype modifier for Stroke
+        stroke_phenotype_mod = patient.baseline_risk_profile.get_dynamic_modifier("STROKE")
+        total_stroke_prob = base_stroke_prob * stroke_phenotype_mod
 
         # Split into ischemic vs hemorrhagic (epidemiological distribution)
         probs.to_ischemic_stroke = total_stroke_prob * self.STROKE_ISCHEMIC_FRACTION
@@ -134,14 +142,21 @@ class TransitionCalculator:
             # SGLT2i Effect on HF Hospitalization: HR ~0.65-0.70 (DAPA-HF, EMPEROR-Reduced)
             sglt2_hf_mult = 0.70 if patient.on_sglt2_inhibitor else 1.0
 
-            probs.to_hf = self.risk_calc.get_monthly_event_prob(
+            base_hf_prob = self.risk_calc.get_monthly_event_prob(
                 patient.age, patient.sex.value, risk_sbp, patient.egfr,
                 RiskOutcome.HEART_FAILURE, patient.has_diabetes, patient.is_smoker,
                 patient.total_cholesterol, patient.hdl_cholesterol, patient.bmi, 1.0
-            ) * sglt2_hf_mult
+            )
+
+            # Apply baseline risk phenotype modifier for HF
+            hf_phenotype_mod = patient.baseline_risk_profile.get_dynamic_modifier("HF")
+            probs.to_hf = base_hf_prob * hf_phenotype_mod * sglt2_hf_mult
 
         # 2. Mortality (CV and Non-CV)
-        probs.to_cv_death = self._calc_cv_death(patient)
+        base_cv_death = self._calc_cv_death(patient)
+        # Apply baseline risk phenotype modifier for CV Death
+        death_phenotype_mod = patient.baseline_risk_profile.get_dynamic_modifier("DEATH")
+        probs.to_cv_death = base_cv_death * death_phenotype_mod
         probs.to_non_cv_death = annual_to_monthly_prob(self.get_background_mortality(patient.age))
 
         # 3. CRITICAL FIX: Ensure total probability doesn't exceed 1.0

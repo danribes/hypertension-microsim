@@ -230,9 +230,11 @@ Enables **subgroup cost-effectiveness analysis**:
 
 ### How Event Probabilities Are Actually Assigned
 
-> **Critical Distinction**: The risk stratification systems above (Framingham, KDIGO, GCUA, EOCRI) are calculated **once at baseline** for classification and subgroup analysis. They do **NOT** directly drive simulation dynamics.
+> **Two-Layer Architecture**: The risk stratification systems (Framingham, KDIGO, GCUA, EOCRI) are calculated **once at baseline** and serve two purposes:
+> 1. **Classification** for subgroup analysis and reporting
+> 2. **Dynamic modification** via phenotype-specific multipliers on event probabilities
 
-The actual monthly event probabilities are calculated using the **PREVENT Risk Calculator** with real-time patient characteristics:
+The model uses a **layered risk calculation**:
 
 #### PREVENT Risk Calculator (`src/risks/prevent.py`)
 
@@ -308,19 +310,35 @@ effective_sbp_reduction = nominal_reduction × 0.30
 
 ---
 
+#### Phenotype-Specific Risk Modifiers
+
+The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific multipliers. Key examples:
+
+| Phenotype | MI | Stroke | HF | ESRD | Death | Clinical Profile |
+|-----------|-----|--------|-----|------|-------|-----------------|
+| GCUA-I (Accelerated Ager) | 1.3× | 1.4× | 1.4× | 1.3× | 1.5× | Multi-organ decline |
+| GCUA-IV (Senescent) | 1.8× | 2.0× | 2.2× | 1.5× | 2.5× | High competing mortality |
+| **EOCRI-B (Silent Renal)** | 0.7× | 0.75× | 0.9× | **2.0×** | 1.1× | Low CV, high renal |
+| EOCRI-C (Premature Vascular) | 1.6× | 1.7× | 1.3× | 0.8× | 1.2× | Young atherosclerosis |
+| KDIGO Very High | 1.4× | 1.5× | 1.6× | 1.8× | 2.0× | Advanced CKD |
+
+> **Key Innovation**: EOCRI Type B patients have 2× faster ESRD progression despite 0.7× MI risk. This captures the "silent renal" phenotype missed by traditional Framingham scoring.
+
 #### Why This Architecture?
 
-| Risk Stratification (Baseline) | PREVENT Equations (Monthly) |
-|-------------------------------|----------------------------|
-| Calculated once at start | Recalculated every month |
-| For classification/subgroups | For actual event probabilities |
-| Based on phenotype algorithms | Based on current patient state |
-| Enables post-hoc analysis | Drives simulation dynamics |
+| Layer | Purpose | When Applied |
+|-------|---------|--------------|
+| PREVENT equations | Base probability from patient characteristics | Monthly |
+| Phenotype modifiers | Adjust for baseline risk phenotype | Monthly (static modifier) |
+| Prior event multipliers | Increase risk after MI/Stroke/TIA | Monthly |
+| Treatment effects | Reduce risk via BP lowering | Monthly |
+| SGLT2i effects | Additional renal/HF protection | Monthly |
 
-This separation allows:
-1. **Clinically meaningful subgroups** for reporting without artificially constraining the simulation
+This layered design allows:
+1. **Phenotype-specific trajectories** - EOCRI-B patients progress to ESRD faster despite lower CV events
 2. **Dynamic risk** that responds to treatment effects, disease progression, and aging
-3. **Transparent validation** - compare population risk profiles to trial enrollments
+3. **Clinically meaningful subgroups** for post-hoc analysis
+4. **Transparent validation** - compare population risk profiles to trial enrollments
 
 ---
 

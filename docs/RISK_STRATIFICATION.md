@@ -2,11 +2,16 @@
 
 ## Overview
 
-The microsimulation model incorporates four risk stratification systems to classify patients at baseline. These systems provide clinical context and enable subgroup analysis but **do not directly modify simulation dynamics**.
+The microsimulation model incorporates four risk stratification systems to classify patients at baseline. These systems serve **two purposes**:
 
-> **Important**: As stated in `src/risk_assessment.py`: "These assessments are calculated once at baseline for each patient and used for subgroup analysis. They do NOT modify model dynamics."
+1. **Subgroup analysis and reporting** - Stratify outcomes by clinical phenotype
+2. **Dynamic risk modification** - Phenotype-based multipliers that modify simulation event probabilities
 
-The actual simulation uses **PREVENT risk equations** with direct patient characteristics to calculate monthly event probabilities.
+> **Architecture**: The model uses a two-layer risk calculation:
+> 1. **PREVENT equations** calculate base monthly event probabilities from patient characteristics
+> 2. **Phenotype modifiers** adjust these probabilities based on baseline risk classification
+
+This design preserves the clinical fidelity of PREVENT while allowing phenotype-specific risk trajectories.
 
 ---
 
@@ -170,12 +175,12 @@ GCUA, EOCRI, and KDIGO are **mutually exclusive** for renal risk classification.
 
 ---
 
-## What Actually Drives Simulation Dynamics?
+## What Drives Simulation Dynamics?
 
-The risk stratification scores are **not used** in the simulation engine. Instead, the model uses:
+The model uses a **layered risk calculation** that combines PREVENT equations with phenotype-specific modifiers:
 
-### 1. PREVENT Risk Calculator (`src/risks/prevent.py`)
-Calculates monthly event probabilities using:
+### Layer 1: PREVENT Risk Calculator (`src/risks/prevent.py`)
+Calculates **base** monthly event probabilities using:
 - Age, Sex
 - Systolic blood pressure (true physiological, accounting for white coat effect)
 - eGFR
@@ -185,7 +190,39 @@ Calculates monthly event probabilities using:
 - BMI
 - UACR (optional enhancement)
 
-### 2. Prior Event Multipliers (`src/transitions.py`)
+### Layer 2: Phenotype Risk Modifiers (`src/risk_assessment.py`)
+
+The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific multipliers:
+
+**GCUA Phenotypes (age ≥60, eGFR >60):**
+| Phenotype | MI | Stroke | HF | ESRD | Death | Clinical Rationale |
+|-----------|-----|--------|-----|------|-------|-------------------|
+| I (Accelerated Ager) | 1.3× | 1.4× | 1.4× | 1.3× | 1.5× | Multi-organ decline synergy |
+| II (Silent Renal) | 0.9× | 0.95× | 1.1× | 1.4× | 1.2× | Renal-dominant, CV preserved |
+| III (Vascular Dominant) | 1.4× | 1.5× | 1.2× | 0.8× | 1.3× | Atherosclerotic pathway |
+| IV (Senescent) | 1.8× | 2.0× | 2.2× | 1.5× | 2.5× | High competing mortality |
+| Moderate | 1.1× | 1.1× | 1.15× | 1.15× | 1.1× | Intermediate risk |
+| Low | 0.9× | 0.9× | 0.9× | 0.9× | 0.85× | Lower than average |
+
+**EOCRI Phenotypes (age 18-59, eGFR >60):**
+| Phenotype | MI | Stroke | HF | ESRD | Death | Clinical Rationale |
+|-----------|-----|--------|-----|------|-------|-------------------|
+| A (Early Metabolic) | 1.2× | 1.3× | 1.5× | 1.5× | 1.4× | Metabolic syndrome burden |
+| **B (Silent Renal)** | 0.7× | 0.75× | 0.9× | **2.0×** | 1.1× | **KEY: Low CV, high renal** |
+| C (Premature Vascular) | 1.6× | 1.7× | 1.3× | 0.8× | 1.2× | Young atherosclerosis |
+| Low | 0.8× | 0.8× | 0.85× | 0.9× | 0.8× | Lower than average |
+
+**KDIGO Risk Levels (eGFR ≤60):**
+| Risk Level | MI | Stroke | HF | ESRD | Death |
+|------------|-----|--------|-----|------|-------|
+| Very High | 1.4× | 1.5× | 1.6× | 1.8× | 2.0× |
+| High | 1.2× | 1.3× | 1.4× | 1.5× | 1.5× |
+| Moderate | 1.1× | 1.1× | 1.2× | 1.2× | 1.1× |
+| Low | 0.9× | 0.9× | 0.95× | 0.95× | 0.9× |
+
+> **Key Insight**: EOCRI Type B patients have 2.0× accelerated ESRD progression despite 0.7× MI risk. This captures the "silent renal" phenotype missed by traditional Framingham scoring.
+
+### Layer 3: Prior Event Multipliers (`src/transitions.py`)
 | Prior Event | Risk Multiplier |
 |-------------|-----------------|
 | MI | 2.5× |
@@ -193,31 +230,66 @@ Calculates monthly event probabilities using:
 | TIA | 2.0× |
 | Heart Failure | 2.0× |
 
-### 3. Treatment Effects (`src/treatment.py`)
+### Layer 4: Treatment Effects (`src/treatment.py`)
 | Treatment | SBP Reduction | Monthly Cost |
 |-----------|---------------|--------------|
 | IXA-001 | 20 ± 8 mmHg | $500 |
 | Spironolactone | 9 ± 6 mmHg | $15 |
 | Standard Care | 3 ± 5 mmHg | $50 |
 
-### 4. SGLT2 Inhibitor Effects
+### Layer 5: SGLT2 Inhibitor Effects
 - Heart failure hospitalization: HR 0.70 (30% reduction)
 - eGFR decline rate: 40% slower progression
 
-### 5. Adherence Effects
+### Layer 6: Adherence Effects
 - Non-adherent patients: 70% reduction in treatment effect (only 30% of benefit)
+
+---
+
+## Probability Calculation Flow
+
+```
+PREVENT Base Probability
+        │
+        ▼
+  × Phenotype Modifier (GCUA/EOCRI/KDIGO)
+        │
+        ▼
+  × Prior Event Multiplier (if applicable)
+        │
+        ▼
+  × Treatment Effect (if applicable)
+        │
+        ▼
+  × SGLT2i Effect (if applicable)
+        │
+        ▼
+  Final Monthly Event Probability
+```
 
 ---
 
 ## Use Cases for Risk Stratification
 
-Although risk scores don't modify dynamics, they serve important purposes:
+Risk stratification now serves both analytical and dynamic purposes:
 
+### Dynamic Simulation Impact
+1. **Phenotype-Specific Trajectories**: EOCRI-B patients experience 2× faster ESRD progression
+2. **Risk-Adjusted Event Rates**: GCUA-IV patients have 2.5× higher mortality probability
+3. **Treatment Response Heterogeneity**: Different phenotypes respond differently to interventions
+
+### Analytical Purposes
 1. **Subgroup Analysis**: Compare outcomes (costs, QALYs, events) across risk categories
 2. **Population Characterization**: Describe the simulated population's risk profile
 3. **Clinical Interpretation**: Map simulation results to real-world patient phenotypes
 4. **Reporting**: Generate stratified results for regulatory/HTA submissions
 5. **Validation**: Compare model population to trial/registry populations
+
+### Clinical Decision Support
+The phenotype modifiers enable the model to answer questions like:
+- "How much more benefit does EOCRI-B (Silent Renal) get from early SGLT2i?"
+- "What's the cost-effectiveness of aggressive treatment in GCUA-I vs GCUA-IV?"
+- "Should we screen young adults for albuminuria to identify Type B patients?"
 
 ---
 
@@ -226,7 +298,9 @@ Although risk scores don't modify dynamics, they serve important purposes:
 | Component | File | Key Functions |
 |-----------|------|---------------|
 | Risk calculations | `src/risk_assessment.py` | `calculate_framingham_risk()`, `calculate_kdigo_risk()`, `calculate_gcua_phenotype()`, `calculate_eocri_phenotype()` |
+| **Phenotype modifiers** | `src/risk_assessment.py` | `BaselineRiskProfile.get_dynamic_modifier()` |
 | Patient assignment | `src/population.py` | `PopulationGenerator.generate()` lines 350-404 |
 | PREVENT equations | `src/risks/prevent.py` | `PREVENTRiskCalculator.get_monthly_event_prob()` |
-| Transition probabilities | `src/transitions.py` | `TransitionCalculator.calculate_transitions()` |
+| **CV event transitions** | `src/transitions.py` | `TransitionCalculator.calculate_transitions()` - applies MI, Stroke, HF, Death modifiers |
+| **Renal progression** | `src/patient.py` | `Patient._update_egfr()` - applies ESRD modifier |
 | Subgroup analysis | `streamlit_app.py` | `analyze_subgroups()`, `display_subgroup_analysis()` |

@@ -12,8 +12,10 @@ The model uses a dual-branch age-based risk architecture:
 - Age ≥ 60: Route to GCUA (existing logic)
 - Age 18-59: Route to EOCRI (new logic for "silent" renal risk)
 
-These assessments are calculated once at baseline for each patient
-and used for subgroup analysis. They do NOT modify model dynamics.
+These assessments are calculated once at baseline for each patient.
+They serve two purposes:
+1. Subgroup analysis and reporting
+2. Dynamic risk modification via phenotype-based multipliers in simulation
 """
 
 from dataclasses import dataclass
@@ -82,6 +84,119 @@ class BaselineRiskProfile:
 
     # Confidence
     risk_profile_confidence: str = "high"  # "high", "moderate", "low" based on missing data
+
+    def get_dynamic_modifier(self, outcome: str) -> float:
+        """
+        Calculate outcome-specific risk multiplier based on baseline phenotype.
+
+        This method enables baseline risk stratification to influence simulation
+        dynamics by returning multiplicative modifiers for event probabilities.
+
+        Args:
+            outcome: Event type - one of:
+                "MI" - Myocardial infarction
+                "STROKE" - Ischemic/hemorrhagic stroke
+                "HF" - Heart failure hospitalization
+                "ESRD" - End-stage renal disease progression
+                "DEATH" - All-cause mortality
+
+        Returns:
+            Multiplicative modifier (0.7-2.5x baseline probability)
+            1.0 means no modification from baseline PREVENT calculation
+
+        Clinical Rationale:
+            - GCUA-I (Accelerated Ager): Multi-organ decline synergy
+            - GCUA-II (Silent Renal): Renal-dominant, CV relatively preserved
+            - GCUA-III (Vascular Dominant): Atherosclerotic pathway primary
+            - GCUA-IV (Senescent): High competing mortality risk
+            - EOCRI-A (Early Metabolic): Metabolic syndrome accelerates both pathways
+            - EOCRI-B (Silent Renal): KEY TARGET - low CV but high renal risk
+            - EOCRI-C (Premature Vascular): Young atherosclerosis
+            - KDIGO levels: Established CKD burden scales risk
+        """
+        outcome = outcome.upper()
+        modifier = 1.0
+
+        # GCUA-based modifiers (age ≥60, eGFR >60)
+        if self.renal_risk_type == "GCUA" and self.gcua_phenotype:
+            gcua_modifiers = {
+                # Phenotype I: Accelerated Ager - high renal + high CVD
+                # Multi-organ decline, synergistic damage
+                "I": {"MI": 1.3, "STROKE": 1.4, "HF": 1.4, "ESRD": 1.3, "DEATH": 1.5},
+
+                # Phenotype II: Silent Renal - high renal + low CVD
+                # Primary renal trajectory, CV relatively protected
+                "II": {"MI": 0.9, "STROKE": 0.95, "HF": 1.1, "ESRD": 1.4, "DEATH": 1.2},
+
+                # Phenotype III: Vascular Dominant - low renal + high CVD
+                # Atherosclerotic pathway, renal protected
+                "III": {"MI": 1.4, "STROKE": 1.5, "HF": 1.2, "ESRD": 0.8, "DEATH": 1.3},
+
+                # Phenotype IV: Senescent - high mortality
+                # Frailty, competing risks dominate
+                "IV": {"MI": 1.8, "STROKE": 2.0, "HF": 2.2, "ESRD": 1.5, "DEATH": 2.5},
+
+                # Moderate risk
+                "Moderate": {"MI": 1.1, "STROKE": 1.1, "HF": 1.15, "ESRD": 1.15, "DEATH": 1.1},
+
+                # Low risk
+                "Low": {"MI": 0.9, "STROKE": 0.9, "HF": 0.9, "ESRD": 0.9, "DEATH": 0.85},
+            }
+
+            phenotype_mods = gcua_modifiers.get(self.gcua_phenotype, {})
+            modifier = phenotype_mods.get(outcome, 1.0)
+
+        # EOCRI-based modifiers (age 18-59, eGFR >60)
+        elif self.renal_risk_type == "EOCRI" and self.eocri_phenotype:
+            eocri_modifiers = {
+                # Type A: Early Metabolic - elevated uACR + diabetes/obesity
+                # Metabolic syndrome accelerates both CV and renal damage
+                "A": {"MI": 1.2, "STROKE": 1.3, "HF": 1.5, "ESRD": 1.5, "DEATH": 1.4},
+
+                # Type B: Silent Renal - elevated uACR alone (KEY TARGET)
+                # Low short-term CV risk but high long-term renal risk
+                # Would be missed by Framingham - captures "hidden" renal trajectory
+                "B": {"MI": 0.7, "STROKE": 0.75, "HF": 0.9, "ESRD": 2.0, "DEATH": 1.1},
+
+                # Type C: Premature Vascular - normal uACR + high lipids/smoking
+                # Young atherosclerosis, renal relatively protected
+                "C": {"MI": 1.6, "STROKE": 1.7, "HF": 1.3, "ESRD": 0.8, "DEATH": 1.2},
+
+                # Low risk
+                "Low": {"MI": 0.8, "STROKE": 0.8, "HF": 0.85, "ESRD": 0.9, "DEATH": 0.8},
+            }
+
+            phenotype_mods = eocri_modifiers.get(self.eocri_phenotype, {})
+            modifier = phenotype_mods.get(outcome, 1.0)
+
+        # KDIGO-based modifiers (eGFR ≤60)
+        elif self.renal_risk_type == "KDIGO" and self.kdigo_risk_level:
+            kdigo_modifiers = {
+                # Very High: G4-G5 or severe albuminuria
+                # Established advanced CKD, high CV and mortality burden
+                "Very High": {"MI": 1.4, "STROKE": 1.5, "HF": 1.6, "ESRD": 1.8, "DEATH": 2.0},
+
+                # High: G3b or moderate-severe albuminuria
+                "High": {"MI": 1.2, "STROKE": 1.3, "HF": 1.4, "ESRD": 1.5, "DEATH": 1.5},
+
+                # Moderate: G3a or mild-moderate albuminuria
+                "Moderate": {"MI": 1.1, "STROKE": 1.1, "HF": 1.2, "ESRD": 1.2, "DEATH": 1.1},
+
+                # Low: G1-G2 with minimal albuminuria (shouldn't be in KDIGO pathway)
+                "Low": {"MI": 0.9, "STROKE": 0.9, "HF": 0.95, "ESRD": 0.95, "DEATH": 0.9},
+            }
+
+            risk_mods = kdigo_modifiers.get(self.kdigo_risk_level, {})
+            modifier = risk_mods.get(outcome, 1.0)
+
+        # Additional Framingham-based adjustment for all patients
+        # High Framingham risk compounds phenotype-specific risk
+        if self.framingham_category == "High" and outcome in ["MI", "STROKE", "DEATH"]:
+            modifier *= 1.1  # 10% additional increase for high Framingham
+        elif self.framingham_category == "Low" and outcome in ["MI", "STROKE"]:
+            modifier *= 0.95  # 5% reduction for low Framingham
+
+        return modifier
 
 
 def calculate_gcua_phenotype(inputs: RiskInputs) -> dict:

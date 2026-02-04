@@ -370,9 +370,14 @@ class Patient:
         # SGLT2 Inhibitor Protection (DAPA-CKD / EMPA-KIDNEY data)
         # Reduces rate of decline by ~40% (HR ~0.60 for progression)
         sglt2_multiplier = 0.60 if self.on_sglt2_inhibitor else 1.0
-        
+
+        # Baseline risk phenotype modifier for ESRD/renal progression
+        # This allows GCUA, EOCRI, and KDIGO phenotypes to influence decline rate
+        # Key impact: EOCRI-B (Silent Renal) has 2.0x ESRD risk despite low CV risk
+        esrd_phenotype_mod = self.baseline_risk_profile.get_dynamic_modifier("ESRD")
+
         # Total annual decline
-        total_annual_decline = (base_decline + sbp_decline) * dm_multiplier * sglt2_multiplier
+        total_annual_decline = (base_decline + sbp_decline) * dm_multiplier * sglt2_multiplier * esrd_phenotype_mod
         
         # Apply monthly decline
         monthly_decline = total_annual_decline * (months / 12.0)
