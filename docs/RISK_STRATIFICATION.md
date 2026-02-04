@@ -253,6 +253,41 @@ G5 (<15)            Very High   Very High     Very High
 
 > **Note on KDIGO**: Unlike GCUA/EOCRI which are phenotype-based, KDIGO is a **severity-based** classification for established CKD. Higher risk levels reflect both CV burden (cardiorenal syndrome) and progression risk. The 2.0× mortality modifier for Very High reflects the poor prognosis of advanced CKD.
 
+**Framingham CVD Risk (All Patients - Secondary Modifier):**
+
+Framingham is calculated for **all patients** regardless of renal pathway and acts as a **secondary modifier** on top of the renal phenotype (GCUA/EOCRI/KDIGO):
+
+| Category | 10-Year CVD Risk | MI Adjustment | Stroke Adjustment | Death Adjustment | Rationale |
+|----------|------------------|---------------|-------------------|------------------|-----------|
+| **High** | ≥20% | +10% | +10% | +10% | Compounds renal phenotype risk |
+| **Intermediate** | 7.5-19.9% | — | — | — | No additional adjustment |
+| **Borderline** | 5-7.4% | — | — | — | No additional adjustment |
+| **Low** | <5% | -5% | -5% | — | Slight reduction for low CV risk |
+
+**How Framingham Interacts with Renal Phenotypes:**
+
+Example: GCUA-II (Silent Renal) patient with different Framingham categories:
+
+| Framingham | MI | Stroke | HF | ESRD | Death | Interpretation |
+|------------|-----|--------|-----|------|-------|----------------|
+| Low | 0.85× | 0.90× | 1.10× | 1.40× | 1.20× | CV risk further reduced |
+| Borderline | 0.90× | 0.95× | 1.10× | 1.40× | 1.20× | Base GCUA-II modifiers |
+| Intermediate | 0.90× | 0.95× | 1.10× | 1.40× | 1.20× | Base GCUA-II modifiers |
+| High | 0.99× | 1.04× | 1.10× | 1.40× | 1.32× | CV risk elevated despite "Silent Renal" |
+
+> **Why Framingham is a Secondary Modifier**: The PREVENT equations already incorporate most Framingham risk factors (age, sex, BP, lipids, diabetes, smoking). Framingham category provides an additional adjustment to capture patients whose CV risk may be higher or lower than PREVENT predicts based on traditional scoring. This is particularly relevant for:
+> - **High Framingham + Silent Renal phenotypes**: Patients with elevated traditional CV risk factors despite low short-term CVD prediction
+> - **Low Framingham + Vascular phenotypes**: Patients with lipid/smoking risk but otherwise favorable profile
+
+**Framingham Input Variables:**
+- Age, Sex
+- Total cholesterol, HDL cholesterol
+- Systolic blood pressure (treated/untreated)
+- Diabetes status
+- Smoking status
+- Social Deprivation Index (SDI) - adds 3 points if >75
+- Nocturnal SBP - adds 2 points if >130 mmHg
+
 ### Layer 3: Prior Event Multipliers (`src/transitions.py`)
 | Prior Event | Risk Multiplier |
 |-------------|-----------------|

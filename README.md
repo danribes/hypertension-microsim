@@ -340,11 +340,25 @@ The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific
 | Moderate | 1.1× | 1.1× | 1.2× | 1.2× | 1.1× | G3a+A1 OR G1-G2+A2 | Early CKD |
 | Low | 0.9× | 0.9× | 0.95× | 0.95× | 0.9× | G1-G2+A1 | Preserved function |
 
+**Framingham CVD Risk (All Patients - Secondary Modifier):**
+
+Framingham is calculated for all patients and acts as a **secondary modifier** on top of the renal phenotype:
+
+| Category | 10-Year Risk | MI | Stroke | Death | Rationale |
+|----------|--------------|-----|--------|-------|-----------|
+| High | ≥20% | +10% | +10% | +10% | Compounds renal phenotype risk |
+| Intermediate | 7.5-19.9% | — | — | — | No additional adjustment |
+| Borderline | 5-7.4% | — | — | — | No additional adjustment |
+| Low | <5% | -5% | -5% | — | Slight reduction for low CV risk |
+
+> **Why Secondary?** PREVENT equations already incorporate most Framingham factors. Framingham category provides additional adjustment for patients whose CV risk differs from PREVENT prediction.
+
 > **Key Insights**:
 > - **GCUA-III (Vascular Dominant)**: High MI/Stroke (1.4-1.5×) but **protected kidneys** (ESRD 0.8×)
 > - **EOCRI-B (Silent Renal)**: 2× faster ESRD despite 0.7× MI - **missed by Framingham** → target for early SGLT2i
 > - **EOCRI-C (Premature Vascular)**: High MI/Stroke (1.6-1.7×) but **protected kidneys** (ESRD 0.8×) → target for statins
 > - **KDIGO Very High**: 2× mortality reflects cardiorenal syndrome in advanced CKD (G4-G5 or severe albuminuria)
+> - **High Framingham + Silent Renal**: Patients with traditional CV risk factors despite low PREVENT prediction
 
 #### Why This Architecture?
 
