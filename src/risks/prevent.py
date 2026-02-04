@@ -195,13 +195,14 @@ def annual_to_monthly_prob(annual_prob: float) -> float:
 def ten_year_to_annual_prob(ten_year_prob: float) -> float:
     """
     Convert 10-year probability to annual probability.
-    
+
     Args:
         ten_year_prob: 10-year probability (0-1)
-        
+
     Returns:
         Annual probability (0-1)
     """
+    ten_year_prob = np.clip(ten_year_prob, 0.0, 0.999)
     return 1 - (1 - ten_year_prob) ** 0.1
 
 
