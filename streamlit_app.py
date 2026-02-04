@@ -1342,7 +1342,7 @@ def display_patient_trajectories(patients: List[Patient], results: SimulationRes
                 st.dataframe(renal_counts.reset_index().rename(columns={'index': 'Renal State', 'renal_state': 'Count'}), hide_index=True)
 
 
-def display_simulation_calculations(results: SimulationResults, currency: str):
+def display_simulation_calculations(results: SimulationResults, currency: str, sim_log: dict = None):
     """Display detailed simulation calculations for sample patients."""
     st.markdown("### Microsimulation Calculations")
     st.markdown("""
@@ -1351,35 +1351,59 @@ def display_simulation_calculations(results: SimulationResults, currency: str):
     and how events are sampled for individual patients.
     """)
 
+    # Use provided log or try to get from results
+    if sim_log is None:
+        sim_log = getattr(results, 'simulation_log', None)
+
     # Check if simulation log exists
-    if not hasattr(results, 'simulation_log') or not results.simulation_log:
+    if not sim_log:
         st.warning("No detailed simulation log available. Run a new simulation to see calculations.")
         return
 
-    sim_log = results.simulation_log
-
     # Patient selector
     patient_ids = list(sim_log.keys())
+
+    if not patient_ids:
+        st.warning("No patients logged in simulation. Run a new simulation to see calculations.")
+        return
+
+    def format_patient(x):
+        """Safely format patient info for dropdown."""
+        try:
+            age = sim_log[x].get('initial_age', 0)
+            sbp = sim_log[x].get('initial_sbp', 0)
+            return f"Patient {x} (Age {age:.0f}, SBP {sbp:.0f})"
+        except:
+            return f"Patient {x}"
+
     selected_patient = st.selectbox(
         "Select Patient to View",
         patient_ids,
-        format_func=lambda x: f"Patient {x} (Age {sim_log[x]['initial_age']:.0f}, SBP {sim_log[x]['initial_sbp']:.0f})"
+        format_func=format_patient
     )
 
     patient_log = sim_log[selected_patient]
 
-    # Patient summary
+    # Patient summary with safe access
+    initial_age = patient_log.get('initial_age', 'N/A')
+    initial_sbp = patient_log.get('initial_sbp', 'N/A')
+    initial_egfr = patient_log.get('initial_egfr', 'N/A')
+    treatment = patient_log.get('treatment', 'N/A')
+    has_diabetes = patient_log.get('has_diabetes', False)
+    has_hf = patient_log.get('has_hf', False)
+
     st.markdown(f"""
     **Patient {selected_patient} Summary:**
-    - Initial Age: {patient_log['initial_age']:.1f} years
-    - Initial SBP: {patient_log['initial_sbp']:.0f} mmHg
-    - Initial eGFR: {patient_log['initial_egfr']:.1f} mL/min/1.73m²
-    - Treatment: {patient_log['treatment'].upper()}
-    - Diabetes: {'Yes' if patient_log['has_diabetes'] else 'No'}
-    - Heart Failure: {'Yes' if patient_log['has_hf'] else 'No'}
+    - Initial Age: {initial_age:.1f if isinstance(initial_age, (int, float)) else initial_age} years
+    - Initial SBP: {initial_sbp:.0f if isinstance(initial_sbp, (int, float)) else initial_sbp} mmHg
+    - Initial eGFR: {initial_egfr:.1f if isinstance(initial_egfr, (int, float)) else initial_egfr} mL/min/1.73m²
+    - Treatment: {treatment.upper() if isinstance(treatment, str) else treatment}
+    - Diabetes: {'Yes' if has_diabetes else 'No'}
+    - Heart Failure: {'Yes' if has_hf else 'No'}
     """)
 
-    if not patient_log['cycles']:
+    cycles = patient_log.get('cycles', [])
+    if not cycles:
         st.info("No cycle data logged for this patient.")
         return
 
@@ -1389,7 +1413,7 @@ def display_simulation_calculations(results: SimulationResults, currency: str):
     ])
 
     # Convert cycles to dataframe
-    cycles_df = pd.DataFrame(patient_log['cycles'])
+    cycles_df = pd.DataFrame(cycles)
 
     with calc_tab1:
         st.markdown("#### Monthly Transition Probabilities Over Time")
@@ -1913,10 +1937,14 @@ def main():
             st.markdown("### Simulation Calculations")
             calc_arm = st.radio("Select Treatment Arm", ["IXA-001", "Spironolactone"], horizontal=True)
 
+            # Get simulation logs from session state
+            sim_log_ixa = st.session_state.get('sim_log_ixa', {})
+            sim_log_spi = st.session_state.get('sim_log_spi', {})
+
             if calc_arm == "IXA-001":
-                display_simulation_calculations(cea.intervention, currency)
+                display_simulation_calculations(cea.intervention, currency, sim_log_ixa)
             else:
-                display_simulation_calculations(cea.comparator, currency)
+                display_simulation_calculations(cea.comparator, currency, sim_log_spi)
 
         with tab8:
             st.markdown("### Export Results")
