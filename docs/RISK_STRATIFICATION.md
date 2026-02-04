@@ -208,12 +208,24 @@ The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific
 > **Note on GCUA III**: These patients have atherosclerotic disease (lipids, smoking) but relatively preserved kidney function. Their ESRD modifier is 0.8× (protective) while MI/Stroke are elevated 1.4-1.5×.
 
 **EOCRI Phenotypes (age 18-59, eGFR >60):**
-| Phenotype | MI | Stroke | HF | ESRD | Death | Clinical Rationale |
-|-----------|-----|--------|-----|------|-------|-------------------|
-| A (Early Metabolic) | 1.2× | 1.3× | 1.5× | 1.5× | 1.4× | Metabolic syndrome burden |
-| **B (Silent Renal)** | 0.7× | 0.75× | 0.9× | **2.0×** | 1.1× | **KEY: Low CV, high renal** |
-| C (Premature Vascular) | 1.6× | 1.7× | 1.3× | 0.8× | 1.2× | Young atherosclerosis |
-| Low | 0.8× | 0.8× | 0.85× | 0.9× | 0.8× | Lower than average |
+
+| Phenotype | MI | Stroke | HF | ESRD | Death | Criteria | Clinical Rationale |
+|-----------|-----|--------|-----|------|-------|----------|-------------------|
+| **A** (Early Metabolic) | 1.2× | 1.3× | 1.5× | 1.5× | 1.4× | Elevated uACR + (Diabetes OR Obesity) | Metabolic syndrome → accelerated dual CV/renal risk |
+| **B** (Silent Renal) | 0.7× | 0.75× | 0.9× | **2.0×** | 1.1× | Elevated uACR + NO Diabetes | **KEY TARGET**: Low CV but high renal progression |
+| **C** (Premature Vascular) | 1.6× | 1.7× | 1.3× | 0.8× | 1.2× | Normal uACR + (High Lipids OR Smoker) | Young atherosclerosis, kidneys protected |
+| **Low** | 0.8× | 0.8× | 0.85× | 0.9× | 0.8× | Normal uACR + No vascular risk factors | Standard HTN management |
+
+> **Note on EOCRI-B (Silent Renal)**: These patients are the **key value driver** for early intervention:
+> - Would be classified as "low risk" by Framingham (low short-term CVD risk)
+> - Have elevated albuminuria (uACR ≥30) indicating early kidney damage
+> - 2× faster ESRD progression despite 0.7× MI risk
+> - Target for early SGLT2i/RAASi therapy before overt CKD develops
+>
+> **Note on EOCRI-C (Premature Vascular)**: Opposite pattern from Type B:
+> - High CV risk (MI 1.6×, Stroke 1.7×) from lipids/smoking
+> - Protected kidneys (ESRD 0.8×) - no albuminuria
+> - Target for aggressive statins and antiplatelet therapy
 
 **KDIGO Risk Levels (eGFR ≤60):**
 | Risk Level | MI | Stroke | HF | ESRD | Death |

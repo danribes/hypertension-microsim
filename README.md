@@ -325,12 +325,12 @@ The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific
 | Low | 0.9× | 0.9× | 0.9× | 0.9× | 0.85× | None of above | Standard care |
 
 **EOCRI Phenotypes (age 18-59, eGFR >60):**
-| Phenotype | MI | Stroke | HF | ESRD | Death | Clinical Profile |
-|-----------|-----|--------|-----|------|-------|-----------------|
-| A (Early Metabolic) | 1.2× | 1.3× | 1.5× | 1.5× | 1.4× | Elevated uACR + Diabetes/Obesity |
-| **B (Silent Renal)** | 0.7× | 0.75× | 0.9× | **2.0×** | 1.1× | Elevated uACR, no diabetes (KEY) |
-| C (Premature Vascular) | 1.6× | 1.7× | 1.3× | 0.8× | 1.2× | Normal uACR + High lipids/Smoker |
-| Low | 0.8× | 0.8× | 0.85× | 0.9× | 0.8× | Normal uACR, low vascular risk |
+| Phenotype | MI | Stroke | HF | ESRD | Death | Criteria | Clinical Profile |
+|-----------|-----|--------|-----|------|-------|----------|-----------------|
+| A (Early Metabolic) | 1.2× | 1.3× | 1.5× | 1.5× | 1.4× | Elevated uACR + (Diabetes OR Obesity) | Metabolic syndrome, dual risk |
+| **B (Silent Renal)** | 0.7× | 0.75× | 0.9× | **2.0×** | 1.1× | Elevated uACR + NO Diabetes | **KEY**: Low CV, high renal |
+| C (Premature Vascular) | 1.6× | 1.7× | 1.3× | 0.8× | 1.2× | Normal uACR + (High Lipids OR Smoker) | Young atherosclerosis, kidneys protected |
+| Low | 0.8× | 0.8× | 0.85× | 0.9× | 0.8× | Normal uACR + No vascular risk | Standard HTN management |
 
 **KDIGO Risk Levels (eGFR ≤60):**
 | Risk Level | MI | Stroke | HF | ESRD | Death |
@@ -342,7 +342,8 @@ The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific
 
 > **Key Insights**:
 > - **GCUA-III (Vascular Dominant)**: High MI/Stroke (1.4-1.5×) but **protected kidneys** (ESRD 0.8×)
-> - **EOCRI-B (Silent Renal)**: 2× faster ESRD despite 0.7× MI - missed by Framingham
+> - **EOCRI-B (Silent Renal)**: 2× faster ESRD despite 0.7× MI - **missed by Framingham** → target for early SGLT2i
+> - **EOCRI-C (Premature Vascular)**: High MI/Stroke (1.6-1.7×) but **protected kidneys** (ESRD 0.8×) → target for statins
 
 #### Why This Architecture?
 
