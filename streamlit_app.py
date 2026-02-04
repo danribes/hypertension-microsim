@@ -529,6 +529,7 @@ def analyze_subgroups(patients: List[Patient], results: SimulationResults, profi
         'framingham': {'Low': [], 'Borderline': [], 'Intermediate': [], 'High': []},
         'kdigo': {'Low': [], 'Moderate': [], 'High': [], 'Very High': []},
         'gcua': {'I': [], 'II': [], 'III': [], 'IV': [], 'Moderate': [], 'Low': []},
+        'eocri': {'A': [], 'B': [], 'C': [], 'Low': []},
         'age': {'<60': [], '60-70': [], '70-80': [], '80+': []},
         'ckd_stage': {'Stage 1-2': [], 'Stage 3a': [], 'Stage 3b': [], 'Stage 4': [], 'ESRD': []},
     }
@@ -550,6 +551,11 @@ def analyze_subgroups(patients: List[Patient], results: SimulationResults, profi
         if profile.gcua_phenotype:
             if profile.gcua_phenotype in subgroup_data['gcua']:
                 subgroup_data['gcua'][profile.gcua_phenotype].append(patient_data)
+
+        # EOCRI phenotype (age 18-59, eGFR >60)
+        if profile.eocri_phenotype:
+            if profile.eocri_phenotype in subgroup_data['eocri']:
+                subgroup_data['eocri'][profile.eocri_phenotype].append(patient_data)
 
         # Age groups
         age = patient_data.get('age', patient.age)
@@ -1120,7 +1126,7 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
     """Display subgroup analysis results."""
     st.markdown("### Subgroup Analysis")
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Framingham Risk", "KDIGO Risk", "GCUA Phenotype", "Age Group", "CKD Stage"])
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Framingham Risk", "KDIGO Risk", "GCUA Phenotype", "EOCRI Phenotype", "Age Group", "CKD Stage"])
 
     with tab1:
         st.markdown("**By Framingham CVD Risk Category**")
@@ -1169,6 +1175,22 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
             st.info("No GCUA phenotype data (requires age 60+, eGFR >60)")
 
     with tab4:
+        st.markdown("**By EOCRI Phenotype** (Age 18-59, eGFR >60)")
+        eocri_data = []
+        phenotype_names = {'A': 'Early Metabolic', 'B': 'Silent Renal', 'C': 'Premature Vascular', 'Low': 'Low Risk'}
+        for cat in ['A', 'B', 'C', 'Low']:
+            patients = subgroup_data['eocri'][cat]
+            n = len(patients)
+            if n > 0:
+                mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
+                mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
+                eocri_data.append({'Phenotype': f"{cat} ({phenotype_names.get(cat, '')})", 'N': n, 'Mean Costs': f"{currency}{mean_costs:,.0f}", 'Mean QALYs': f"{mean_qalys:.3f}"})
+        if eocri_data:
+            st.dataframe(pd.DataFrame(eocri_data), hide_index=True, use_container_width=True)
+        else:
+            st.info("No EOCRI phenotype data (requires age 18-59, eGFR >60)")
+
+    with tab5:
         st.markdown("**By Age Group**")
         age_data = []
         for cat in ['<60', '60-70', '70-80', '80+']:
@@ -1181,7 +1203,7 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
         if age_data:
             st.dataframe(pd.DataFrame(age_data), hide_index=True, use_container_width=True)
 
-    with tab5:
+    with tab6:
         st.markdown("**By CKD Stage**")
         ckd_data = []
         for cat in ['Stage 1-2', 'Stage 3a', 'Stage 3b', 'Stage 4', 'ESRD']:
@@ -1202,6 +1224,7 @@ def display_risk_stratification(profiles: List[BaselineRiskProfile]):
     framingham_counts = {'Low': 0, 'Borderline': 0, 'Intermediate': 0, 'High': 0}
     kdigo_counts = {'Low': 0, 'Moderate': 0, 'High': 0, 'Very High': 0}
     gcua_counts = {'I': 0, 'II': 0, 'III': 0, 'IV': 0, 'Moderate': 0, 'Low': 0}
+    eocri_counts = {'A': 0, 'B': 0, 'C': 0, 'Low': 0}
 
     for p in profiles:
         if p.framingham_category in framingham_counts:
@@ -1210,8 +1233,10 @@ def display_risk_stratification(profiles: List[BaselineRiskProfile]):
             kdigo_counts[p.kdigo_risk_level] += 1
         if p.gcua_phenotype in gcua_counts:
             gcua_counts[p.gcua_phenotype] += 1
+        if p.eocri_phenotype in eocri_counts:
+            eocri_counts[p.eocri_phenotype] += 1
 
-    col1, col2, col3 = st.columns(3)
+    col1, col2, col3, col4 = st.columns(4)
 
     with col1:
         st.markdown("**Framingham CVD Risk**")
@@ -1227,11 +1252,21 @@ def display_risk_stratification(profiles: List[BaselineRiskProfile]):
 
     with col3:
         st.markdown("**GCUA Phenotype**")
+        st.caption("Age 60+, eGFR >60")
         gcua_df = pd.DataFrame([{'Phenotype': k, 'N': v, '%': f"{v/len(profiles)*100:.1f}%"} for k, v in gcua_counts.items() if v > 0])
         if not gcua_df.empty:
             st.dataframe(gcua_df, hide_index=True)
         else:
-            st.info("GCUA applies to age 60+, eGFR >60")
+            st.info("No eligible patients")
+
+    with col4:
+        st.markdown("**EOCRI Phenotype**")
+        st.caption("Age 18-59, eGFR >60")
+        eocri_df = pd.DataFrame([{'Phenotype': k, 'N': v, '%': f"{v/len(profiles)*100:.1f}%"} for k, v in eocri_counts.items() if v > 0])
+        if not eocri_df.empty:
+            st.dataframe(eocri_df, hide_index=True)
+        else:
+            st.info("No eligible patients")
 
 
 def display_event_charts(cea: CEAResults):
@@ -1392,12 +1427,18 @@ def display_simulation_calculations(results: SimulationResults, currency: str, s
     has_diabetes = patient_log.get('has_diabetes', False)
     has_hf = patient_log.get('has_hf', False)
 
+    # Pre-format values to avoid f-string format specifier issues
+    age_str = f"{initial_age:.1f}" if isinstance(initial_age, (int, float)) else str(initial_age)
+    sbp_str = f"{initial_sbp:.0f}" if isinstance(initial_sbp, (int, float)) else str(initial_sbp)
+    egfr_str = f"{initial_egfr:.1f}" if isinstance(initial_egfr, (int, float)) else str(initial_egfr)
+    treatment_str = treatment.upper() if isinstance(treatment, str) else str(treatment)
+
     st.markdown(f"""
     **Patient {selected_patient} Summary:**
-    - Initial Age: {initial_age:.1f if isinstance(initial_age, (int, float)) else initial_age} years
-    - Initial SBP: {initial_sbp:.0f if isinstance(initial_sbp, (int, float)) else initial_sbp} mmHg
-    - Initial eGFR: {initial_egfr:.1f if isinstance(initial_egfr, (int, float)) else initial_egfr} mL/min/1.73m²
-    - Treatment: {treatment.upper() if isinstance(treatment, str) else treatment}
+    - Initial Age: {age_str} years
+    - Initial SBP: {sbp_str} mmHg
+    - Initial eGFR: {egfr_str} mL/min/1.73m²
+    - Treatment: {treatment_str}
     - Diabetes: {'Yes' if has_diabetes else 'No'}
     - Heart Failure: {'Yes' if has_hf else 'No'}
     """)
