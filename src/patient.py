@@ -116,6 +116,10 @@ class Patient:
     # Additional CV risk factors
     has_atrial_fibrillation: bool = False
     has_peripheral_artery_disease: bool = False
+
+    # Resistant Hypertension Specific
+    has_primary_aldosteronism: bool = False  # 15-20% prevalence in resistant HTN
+    years_uncontrolled_htn: float = 0.0  # Duration of uncontrolled hypertension
     
     # Comorbidity burden score
     charlson_score: int = 0  # Calculated at baseline

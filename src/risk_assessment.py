@@ -44,6 +44,8 @@ class RiskInputs:
     # EOCRI-specific inputs
     has_dyslipidemia: bool = False  # For vascular phenotype classification
     has_obesity: bool = False  # BMI ≥ 30 (alternative to raw BMI)
+    # Resistant HTN specific
+    has_primary_aldosteronism: bool = False  # 15-20% prevalence in resistant HTN
 
 
 @dataclass
@@ -81,6 +83,9 @@ class BaselineRiskProfile:
     # PREVENT lifetime risk (age 18-59 patients)
     prevent_30yr_risk: Optional[float] = None  # 30-year CVD risk %
     prevent_risk_category: Optional[str] = None  # "Low", "Borderline", "Intermediate", "High"
+
+    # Resistant HTN specific - Primary Aldosteronism
+    has_primary_aldosteronism: bool = False  # 15-20% of resistant HTN
 
     # Confidence
     risk_profile_confidence: str = "high"  # "high", "moderate", "low" based on missing data
@@ -195,6 +200,51 @@ class BaselineRiskProfile:
             modifier *= 1.1  # 10% additional increase for high Framingham
         elif self.framingham_category == "Low" and outcome in ["MI", "STROKE"]:
             modifier *= 0.95  # 5% reduction for low Framingham
+
+        # Primary Aldosteronism adjustment (15-20% of resistant HTN)
+        # PA patients have higher baseline HF and renal risk due to aldosterone excess
+        if self.has_primary_aldosteronism:
+            pa_modifiers = {
+                "MI": 1.1,      # Mild increase
+                "STROKE": 1.15, # Moderate increase (aldosterone and stroke)
+                "HF": 1.4,      # Strong association (aldosterone-mediated cardiac fibrosis)
+                "ESRD": 1.3,    # Strong association (aldosterone-mediated renal fibrosis)
+                "DEATH": 1.2    # Overall mortality increase
+            }
+            modifier *= pa_modifiers.get(outcome, 1.0)
+
+        return modifier
+
+    def get_treatment_response_modifier(self, treatment: str) -> float:
+        """
+        Calculate treatment response modifier based on patient phenotype.
+
+        Primary aldosteronism patients have enhanced response to aldosterone
+        synthase inhibitors (IXA-001) because their HTN is aldosterone-driven.
+
+        Args:
+            treatment: Treatment type - "IXA_001", "SPIRONOLACTONE", "STANDARD_CARE"
+
+        Returns:
+            Multiplicative modifier for treatment effect (1.0-1.5×)
+            >1.0 means enhanced treatment response
+        """
+        modifier = 1.0
+
+        if self.has_primary_aldosteronism:
+            if treatment == "IXA_001":
+                # Primary aldosteronism patients have excellent response to ASIs
+                # ~30% better BP reduction than non-PA patients
+                modifier = 1.30
+            elif treatment == "SPIRONOLACTONE":
+                # Good response but limited by tolerability
+                modifier = 1.25
+
+        # GCUA/EOCRI phenotype-based treatment response
+        # Silent Renal patients benefit more from renoprotective therapy
+        if self.renal_risk_type == "EOCRI" and self.eocri_phenotype == "B":
+            if treatment in ["IXA_001", "SPIRONOLACTONE"]:
+                modifier *= 1.15  # Better renoprotection in Silent Renal
 
         return modifier
 

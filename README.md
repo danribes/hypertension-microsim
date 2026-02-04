@@ -4,6 +4,51 @@ A state-of-the-art **Individual-Level State-Transition Microsimulation (IL-STM)*
 
 ---
 
+## Target Population: Resistant Hypertension
+
+This model is specifically designed for **resistant hypertension (rHTN)** — a distinct clinical phenotype that demands specialized modeling approaches.
+
+### What is Resistant Hypertension?
+
+**Definition:** Blood pressure remaining above target (≥130/80 mmHg) despite optimal use of ≥3 antihypertensive agents from different classes, including a diuretic, at maximally tolerated doses.
+
+**Prevalence:** 10-15% of treated hypertensive patients (~11,000 per 1 million plan members)
+
+### Why Resistant HTN Requires Microsimulation
+
+Unlike general hypertension, resistant HTN patients present unique characteristics that make cohort-level Markov models inadequate:
+
+| Characteristic | General HTN | Resistant HTN | Modeling Implication |
+|----------------|-------------|---------------|----------------------|
+| **Prior CV events** | 5-10% | 25-35% | Individual history tracking essential |
+| **CKD (eGFR <60)** | 10-15% | 30-40% | Dual cardiac-renal pathways |
+| **Diabetes** | 20-25% | 40-50% | Accelerated progression modeling |
+| **Primary aldosteronism** | 5-10% | **15-20%** | IXA-001 target subpopulation |
+| **Target organ damage** | 15-20% | 60-70% | Higher baseline event rates |
+| **Obesity (BMI ≥30)** | 30-35% | 50-60% | Metabolic phenotype identification |
+
+### Primary Aldosteronism — The IXA-001 Target
+
+**15-20% of resistant HTN patients have primary aldosteronism** — a condition where autonomous aldosterone production drives hypertension. This population is the core target for IXA-001 (aldosterone synthase inhibitor):
+
+- **Enhanced treatment response**: ~30% better BP reduction with IXA-001
+- **Higher baseline risk**: 1.4× HF risk, 1.3× renal risk due to aldosterone-mediated fibrosis
+- **Identifiable from clinical workup**: Aldosterone-to-renin ratio screening
+
+The model captures this via:
+- `has_primary_aldosteronism` patient attribute
+- Treatment response modifiers in `BaselineRiskProfile.get_treatment_response_modifier()`
+- Phenotype-specific risk adjustments (HF 1.4×, ESRD 1.3×)
+
+### Why This Population Needs Individual-Level Modeling
+
+1. **History matters intensely**: A patient with prior MI + CKD Stage 3 + diabetes has fundamentally different risk than one with rHTN alone
+2. **Competing risks are amplified**: CV death vs. renal death vs. other-cause mortality compete more aggressively
+3. **Treatment response is heterogeneous**: Primary aldosteronism patients respond better to ASIs than those with arterial stiffness
+4. **Time-dependent covariates**: SBP, eGFR, and potassium levels change dynamically month-to-month
+
+---
+
 ## Quick Start with Docker
 
 The fastest way to run the Cost-Effectiveness Analysis (CEA) web interface.

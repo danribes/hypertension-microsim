@@ -216,6 +216,26 @@ class PopulationGenerator:
         pad_prevalence = 0.12 + 0.08 * is_smoker + 0.05 * has_diabetes
         pad_prevalence = pad_prevalence.clip(0, 0.30)
         has_pad = self.rng.binomial(1, pad_prevalence, n).astype(bool)
+
+        # ============================================
+        # Resistant Hypertension Specific Attributes
+        # ============================================
+
+        # Primary Aldosteronism (15-20% prevalence in resistant HTN)
+        # Higher prevalence in patients with more severe HTN and obesity
+        # Key target population for aldosterone synthase inhibitors (IXA-001)
+        pa_base_prevalence = 0.17  # 17% baseline
+        pa_prevalence = pa_base_prevalence * (
+            1 + 0.2 * (sbps > 160)  # More severe HTN increases PA probability
+            + 0.15 * (bmis >= 30)   # Obesity associated with PA
+        )
+        pa_prevalence = pa_prevalence.clip(0.10, 0.25)
+        has_primary_aldosteronism = self.rng.binomial(1, pa_prevalence, n).astype(bool)
+
+        # Years of uncontrolled hypertension (proxy from age and disease duration)
+        # Resistant HTN patients have typically been uncontrolled for 3-10 years
+        years_uncontrolled = self.rng.gamma(shape=3.0, scale=2.0, size=n)  # Mean ~6 years
+        years_uncontrolled = np.clip(years_uncontrolled, 1, 15)
         
         # Adherence (Modified by Age and SDI)
         # Baseline probability from params, adjusted by risk factors
@@ -402,6 +422,9 @@ class PopulationGenerator:
             fram = calculate_framingham_risk(risk_inputs)
             baseline_risk.framingham_risk = fram['risk']
             baseline_risk.framingham_category = fram['category']
+
+            # Primary aldosteronism (resistant HTN specific)
+            baseline_risk.has_primary_aldosteronism = has_primary_aldosteronism[i]
             
             # Calculate Charlson score at baseline
             charlson = self._calculate_charlson_score(
@@ -447,6 +470,9 @@ class PopulationGenerator:
                 # Additional CV risk factors
                 has_atrial_fibrillation=has_afib[i],
                 has_peripheral_artery_disease=has_pad[i],
+                # Resistant HTN specific
+                has_primary_aldosteronism=has_primary_aldosteronism[i],
+                years_uncontrolled_htn=years_uncontrolled[i],
                 # Comorbidity burden
                 charlson_score=charlson,
                 # Treatment and adherence
