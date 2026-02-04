@@ -226,7 +226,103 @@ Enables **subgroup cost-effectiveness analysis**:
 - "Do high Framingham patients benefit more?"
 - "How do EOCRI Type B (younger silent renal) patients compare to GCUA Type II?"
 
-> **Important:** These risk stratification scores are calculated once at baseline for classification and subgroup analysis. They do **not** directly modify simulation dynamics - the model uses PREVENT risk equations with patient characteristics for event probabilities. See [docs/RISK_STRATIFICATION.md](docs/RISK_STRATIFICATION.md) for detailed documentation.
+---
+
+### How Event Probabilities Are Actually Assigned
+
+> **Critical Distinction**: The risk stratification systems above (Framingham, KDIGO, GCUA, EOCRI) are calculated **once at baseline** for classification and subgroup analysis. They do **NOT** directly drive simulation dynamics.
+
+The actual monthly event probabilities are calculated using the **PREVENT Risk Calculator** with real-time patient characteristics:
+
+#### PREVENT Risk Calculator (`src/risks/prevent.py`)
+
+The AHA PREVENT equations calculate 10-year CVD risk using:
+
+| Input Variable | Description |
+|----------------|-------------|
+| Age | Patient age (30-79 years) |
+| Sex | Male/Female (separate coefficients) |
+| Systolic BP | True physiological SBP (accounting for white coat effect) |
+| eGFR | Current kidney function (mL/min/1.73m²) |
+| Diabetes | Binary indicator |
+| Smoking | Current smoking status |
+| Total Cholesterol | mg/dL |
+| HDL Cholesterol | mg/dL |
+| BMI | Body mass index |
+| UACR | Urine albumin-creatinine ratio (optional enhancement) |
+
+**Conversion to Monthly Probabilities:**
+```
+10-year risk → Annual risk → Monthly probability
+p_annual = 1 - (1 - p_10yr)^0.1
+p_monthly = 1 - (1 - p_annual)^(1/12)
+```
+
+#### Prior Event Multipliers (`src/transitions.py`)
+
+Patients with prior cardiovascular events have elevated risk:
+
+| Prior Event | Risk Multiplier |
+|-------------|-----------------|
+| MI | 2.5× |
+| Stroke | 3.0× |
+| TIA | 2.0× |
+| Heart Failure | 2.0× |
+
+#### Treatment Effects on Risk (`src/treatment.py`)
+
+Blood pressure reduction translates to risk reduction via meta-analysis-derived relative risks:
+
+| Outcome | RR per 10 mmHg SBP Reduction |
+|---------|------------------------------|
+| Stroke | 0.64 (36% reduction) |
+| MI | 0.78 (22% reduction) |
+| Heart Failure | 0.72 (28% reduction) |
+| Total CVD | 0.75 (25% reduction) |
+
+**Example Calculation:**
+```
+Patient: 65yo male, SBP 160, eGFR 55, diabetic, smoker
+PREVENT 10-year CVD risk: 28%
+Prior MI multiplier: 2.5×
+Adjusted 10-year risk: 70% (capped)
+Monthly probability: ~0.95%
+
+With IXA-001 treatment (20 mmHg reduction):
+RR = 0.75^2 = 0.56 (44% reduction)
+Adjusted monthly probability: ~0.53%
+```
+
+#### SGLT2 Inhibitor Effects
+
+For CKD/HF patients on SGLT2 inhibitors:
+- **Heart failure hospitalization**: HR 0.70 (30% reduction)
+- **eGFR decline rate**: 40% slower progression
+
+#### Adherence Effects
+
+Non-adherent patients receive only 30% of treatment benefit:
+```
+effective_sbp_reduction = nominal_reduction × 0.30
+```
+
+---
+
+#### Why This Architecture?
+
+| Risk Stratification (Baseline) | PREVENT Equations (Monthly) |
+|-------------------------------|----------------------------|
+| Calculated once at start | Recalculated every month |
+| For classification/subgroups | For actual event probabilities |
+| Based on phenotype algorithms | Based on current patient state |
+| Enables post-hoc analysis | Drives simulation dynamics |
+
+This separation allows:
+1. **Clinically meaningful subgroups** for reporting without artificially constraining the simulation
+2. **Dynamic risk** that responds to treatment effects, disease progression, and aging
+3. **Transparent validation** - compare population risk profiles to trial enrollments
+
+---
 
 ### 6. **Patient History Analyzer**
 
