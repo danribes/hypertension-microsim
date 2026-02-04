@@ -257,20 +257,27 @@ def run_simulation_with_progress(
         show_progress=False
     )
 
+    # Create progress elements inside the status container using write
+    progress_placeholder = status_container.empty()
+
+    def update_progress(phase: str, pct: int, detail: str):
+        """Update progress display."""
+        progress_placeholder.markdown(f"""
+**{phase}**
+
+{detail}
+
+{'█' * (pct // 5)}{'░' * (20 - pct // 5)} {pct}%
+""")
+
     # ===== Phase 1: Generate IXA-001 Population =====
-    status_container.update(label="Phase 1/5: Generating IXA-001 population...", state="running")
+    update_progress("Phase 1/5: Generating IXA-001 population", 0, "Creating patient cohort...")
     generator = PopulationGenerator(pop_params)
     patients_ixa = generator.generate()
     baseline_profiles_ixa = [p.baseline_risk_profile for p in patients_ixa]
+    update_progress("Phase 1/5: Generating IXA-001 population", 100, f"Generated {n_patients} patients")
 
     # ===== Phase 2: Run IXA-001 Simulation =====
-    status_container.update(label="Phase 2/5: Simulating IXA-001 arm...", state="running")
-
-    # Create progress bar inside the status container
-    progress_text = st.empty()
-    progress_bar = st.progress(0)
-    progress_text.text("Initializing IXA-001 simulation...")
-
     sim = Simulation(config)
 
     # Apply custom costs if provided
@@ -279,14 +286,13 @@ def run_simulation_with_progress(
 
     # Run simulation with progress updates
     results_ixa = _run_simulation_with_callback(
-        sim, patients_ixa, Treatment.IXA_001, total_cycles, progress_bar, progress_text, "IXA-001",
-        treatment_params, clinical_params
+        sim, patients_ixa, Treatment.IXA_001, total_cycles,
+        lambda pct, txt: update_progress("Phase 2/5: Simulating IXA-001 arm", pct, txt),
+        "IXA-001", treatment_params, clinical_params
     )
 
     # ===== Phase 3: Generate Spironolactone Population =====
-    status_container.update(label="Phase 3/5: Generating Spironolactone population...", state="running")
-    progress_bar.progress(0)
-    progress_text.text("Generating comparator population...")
+    update_progress("Phase 3/5: Generating Spironolactone population", 0, "Creating comparator cohort...")
 
     pop_params_comp = PopulationParams(
         n_patients=n_patients, seed=seed,
@@ -306,28 +312,25 @@ def run_simulation_with_progress(
     generator_comp = PopulationGenerator(pop_params_comp)
     patients_spi = generator_comp.generate()
     baseline_profiles_spi = [p.baseline_risk_profile for p in patients_spi]
+    update_progress("Phase 3/5: Generating Spironolactone population", 100, f"Generated {n_patients} patients")
 
     # ===== Phase 4: Run Spironolactone Simulation =====
-    status_container.update(label="Phase 4/5: Simulating Spironolactone arm...", state="running")
-    progress_bar.progress(0)
-    progress_text.text("Initializing Spironolactone simulation...")
-
     results_spi = _run_simulation_with_callback(
-        sim, patients_spi, Treatment.SPIRONOLACTONE, total_cycles, progress_bar, progress_text, "Spironolactone",
-        treatment_params, clinical_params
+        sim, patients_spi, Treatment.SPIRONOLACTONE, total_cycles,
+        lambda pct, txt: update_progress("Phase 4/5: Simulating Spironolactone arm", pct, txt),
+        "Spironolactone", treatment_params, clinical_params
     )
 
     # ===== Phase 5: Calculate Results =====
-    status_container.update(label="Phase 5/5: Calculating cost-effectiveness...", state="running")
-    progress_bar.progress(100)
-    progress_text.text("Computing ICER and outcomes...")
+    update_progress("Phase 5/5: Calculating cost-effectiveness", 50, "Computing ICER and outcomes...")
 
     cea = CEAResults(intervention=results_ixa, comparator=results_spi)
     cea.calculate_icer()
 
-    # Clear progress elements and show completion
-    progress_bar.empty()
-    progress_text.empty()
+    update_progress("Phase 5/5: Calculating cost-effectiveness", 100, "Analysis complete!")
+
+    # Clear progress and show completion
+    progress_placeholder.empty()
     status_container.update(label="Simulation complete!", state="complete")
 
     return cea, patients_ixa, patients_spi, baseline_profiles_ixa
@@ -362,7 +365,7 @@ def _apply_custom_costs(sim: Simulation, custom_costs: CustomCostInputs):
     sim.costs.disability_multiplier_hf = custom_costs.disability_multiplier_hf
 
 
-def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progress_bar, progress_text, arm_name,
+def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progress_callback, arm_name,
                                    treatment_params=None, clinical_params=None):
     """Run simulation with progress updates."""
     from src.patient import Treatment as TreatmentEnum
@@ -383,8 +386,7 @@ def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progre
         if cycle % update_interval == 0:
             progress_pct = int((cycle / n_cycles) * 100)
             years_simulated = cycle / 12
-            progress_bar.progress(progress_pct)
-            progress_text.text(f"Simulating {arm_name}: Year {years_simulated:.1f}/{sim.config.time_horizon_months/12:.0f} ({progress_pct}%)")
+            progress_callback(progress_pct, f"Simulating {arm_name}: Year {years_simulated:.1f}/{sim.config.time_horizon_months/12:.0f}")
 
         for patient in patients:
             if not patient.is_alive:
@@ -456,8 +458,7 @@ def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progre
                 patient.treatment = TreatmentEnum.STANDARD_CARE
 
     # Final progress update
-    progress_bar.progress(100)
-    progress_text.text(f"{arm_name} simulation complete!")
+    progress_callback(100, f"{arm_name} simulation complete!")
 
     # Store patient results
     for patient in patients:
