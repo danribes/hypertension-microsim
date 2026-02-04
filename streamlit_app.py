@@ -366,11 +366,24 @@ def _apply_custom_costs(sim: Simulation, custom_costs: CustomCostInputs):
 
 
 def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progress_callback, arm_name,
-                                   treatment_params=None, clinical_params=None):
-    """Run simulation with progress updates."""
+                                   treatment_params=None, clinical_params=None, n_sample_patients=5):
+    """Run simulation with progress updates and detailed logging for sample patients."""
     from src.patient import Treatment as TreatmentEnum
 
     results = SimulationResults(treatment=treatment, n_patients=len(patients))
+
+    # Initialize detailed simulation log for sample patients
+    sample_ids = list(range(min(n_sample_patients, len(patients))))
+    simulation_log = {pid: {
+        'patient_id': pid,
+        'initial_age': patients[pid].age,
+        'initial_sbp': patients[pid].current_sbp,
+        'initial_egfr': patients[pid].egfr,
+        'treatment': treatment.value,
+        'has_diabetes': patients[pid].has_diabetes,
+        'has_hf': patients[pid].has_heart_failure,
+        'cycles': []
+    } for pid in sample_ids}
 
     # Assign treatment to all patients
     for patient in patients:
@@ -380,6 +393,7 @@ def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progre
 
     n_cycles = int(sim.config.time_horizon_months / sim.config.cycle_length_months)
     update_interval = max(1, n_cycles // 20)  # Update progress ~20 times
+    log_interval = max(1, n_cycles // 60)  # Log ~60 times (every ~8 months for 40yr sim)
 
     for cycle in range(n_cycles):
         # Update progress bar periodically
@@ -393,26 +407,62 @@ def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progre
                 continue
 
             # Check adherence
-            if sim.adherence_transition.check_adherence_change(patient):
+            adherence_changed = sim.adherence_transition.check_adherence_change(patient)
+            if adherence_changed:
                 sim.treatment_mgr.update_effect_for_adherence(patient)
 
             # Safety checks for Spironolactone
             is_quarterly = (int(patient.time_in_simulation) % 3 == 0)
+            hyperkalemia_stop = False
             if is_quarterly and patient.treatment == TreatmentEnum.SPIRONOLACTONE:
                 patient.accrue_costs(sim.costs.lab_test_cost_k)
                 if sim.treatment_mgr.check_safety_stop_rules(patient):
                     sim.treatment_mgr.assign_treatment(patient, TreatmentEnum.STANDARD_CARE)
                     patient.hyperkalemia_history += 1
+                    hyperkalemia_stop = True
 
             # Neuro progression
             old_neuro = patient.neuro_state
             sim.neuro_transition.check_neuro_progression(patient)
-            if patient.neuro_state != old_neuro and patient.neuro_state.value == "dementia":
+            neuro_changed = patient.neuro_state != old_neuro
+            if neuro_changed and patient.neuro_state.value == "dementia":
                 results.dementia_cases += 1
 
-            # Cardiac events
+            # Cardiac events - calculate transition probabilities
             probs = sim.transition_calc.calculate_transitions(patient)
             new_event = sim.transition_calc.sample_event(patient, probs)
+
+            # Log detailed calculations for sample patients
+            if patient.patient_id in sample_ids and cycle % log_interval == 0:
+                cycle_log = {
+                    'cycle': cycle,
+                    'year': cycle / 12,
+                    'age': patient.age,
+                    'sbp': patient.current_sbp,
+                    'true_sbp': getattr(patient, 'true_mean_sbp', patient.current_sbp),
+                    'egfr': patient.egfr,
+                    'is_adherent': patient.is_adherent,
+                    'adherence_changed': adherence_changed,
+                    'cardiac_state': patient.cardiac_state.value if hasattr(patient.cardiac_state, 'value') else str(patient.cardiac_state),
+                    'renal_state': patient.renal_state.value if hasattr(patient.renal_state, 'value') else str(patient.renal_state),
+                    'neuro_state': patient.neuro_state.value if hasattr(patient.neuro_state, 'value') else str(patient.neuro_state),
+                    'probs': {
+                        'p_mi': probs.to_mi,
+                        'p_ischemic_stroke': probs.to_ischemic_stroke,
+                        'p_hemorrhagic_stroke': probs.to_hemorrhagic_stroke,
+                        'p_tia': probs.to_tia,
+                        'p_hf': probs.to_hf,
+                        'p_cv_death': probs.to_cv_death,
+                        'p_non_cv_death': probs.to_non_cv_death,
+                    },
+                    'event': new_event.value if hasattr(new_event, 'value') else str(new_event) if new_event else None,
+                    'neuro_changed': neuro_changed,
+                    'hyperkalemia_stop': hyperkalemia_stop,
+                    'cumulative_costs': patient.cumulative_costs,
+                    'cumulative_qalys': patient.cumulative_qalys,
+                    'treatment_effect': patient._treatment_effect_mmhg,
+                }
+                simulation_log[patient.patient_id]['cycles'].append(cycle_log)
 
             if new_event:
                 if new_event == "NON_CV_DEATH":
@@ -440,6 +490,7 @@ def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progre
             sim._accrue_outcomes(patient, results)
 
             # Update SBP
+            old_sbp = patient.current_sbp
             patient.update_sbp(patient._treatment_effect_mmhg, sim.rng)
 
             # Advance time and check renal
@@ -465,6 +516,10 @@ def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progre
         results.patient_results.append(patient.to_dict())
 
     results.calculate_means()
+
+    # Attach simulation log to results
+    results.simulation_log = simulation_log
+
     return results
 
 
@@ -1287,6 +1342,237 @@ def display_patient_trajectories(patients: List[Patient], results: SimulationRes
                 st.dataframe(renal_counts.reset_index().rename(columns={'index': 'Renal State', 'renal_state': 'Count'}), hide_index=True)
 
 
+def display_simulation_calculations(results: SimulationResults, currency: str):
+    """Display detailed simulation calculations for sample patients."""
+    st.markdown("### Microsimulation Calculations")
+    st.markdown("""
+    This section shows the detailed calculations applied during the microsimulation
+    to randomize patient trajectories. View how transition probabilities are calculated
+    and how events are sampled for individual patients.
+    """)
+
+    # Check if simulation log exists
+    if not hasattr(results, 'simulation_log') or not results.simulation_log:
+        st.warning("No detailed simulation log available. Run a new simulation to see calculations.")
+        return
+
+    sim_log = results.simulation_log
+
+    # Patient selector
+    patient_ids = list(sim_log.keys())
+    selected_patient = st.selectbox(
+        "Select Patient to View",
+        patient_ids,
+        format_func=lambda x: f"Patient {x} (Age {sim_log[x]['initial_age']:.0f}, SBP {sim_log[x]['initial_sbp']:.0f})"
+    )
+
+    patient_log = sim_log[selected_patient]
+
+    # Patient summary
+    st.markdown(f"""
+    **Patient {selected_patient} Summary:**
+    - Initial Age: {patient_log['initial_age']:.1f} years
+    - Initial SBP: {patient_log['initial_sbp']:.0f} mmHg
+    - Initial eGFR: {patient_log['initial_egfr']:.1f} mL/min/1.73m²
+    - Treatment: {patient_log['treatment'].upper()}
+    - Diabetes: {'Yes' if patient_log['has_diabetes'] else 'No'}
+    - Heart Failure: {'Yes' if patient_log['has_hf'] else 'No'}
+    """)
+
+    if not patient_log['cycles']:
+        st.info("No cycle data logged for this patient.")
+        return
+
+    # Create tabs for different views
+    calc_tab1, calc_tab2, calc_tab3, calc_tab4 = st.tabs([
+        "Transition Probabilities", "Trajectory Charts", "Event Log", "Calculation Details"
+    ])
+
+    # Convert cycles to dataframe
+    cycles_df = pd.DataFrame(patient_log['cycles'])
+
+    with calc_tab1:
+        st.markdown("#### Monthly Transition Probabilities Over Time")
+        st.markdown("""
+        These probabilities are calculated each month using the PREVENT risk equations,
+        modified by patient characteristics, prior events, and treatment effects.
+        """)
+
+        # Extract probability columns
+        if 'probs' in cycles_df.columns:
+            probs_df = pd.json_normalize(cycles_df['probs'])
+            probs_df['year'] = cycles_df['year']
+
+            # Display probability trends
+            prob_cols = ['p_mi', 'p_ischemic_stroke', 'p_hf', 'p_cv_death', 'p_non_cv_death']
+            prob_labels = ['MI', 'Ischemic Stroke', 'Heart Failure', 'CV Death', 'Non-CV Death']
+
+            chart_data = probs_df[['year'] + prob_cols].copy()
+            chart_data.columns = ['Year'] + prob_labels
+            chart_data = chart_data.set_index('Year')
+
+            st.line_chart(chart_data, use_container_width=True)
+            st.caption("Monthly transition probabilities (higher = more likely)")
+
+            # Show probability formula explanation
+            with st.expander("How are these probabilities calculated?"):
+                st.markdown("""
+                **Transition Probability Calculation:**
+
+                1. **Base Risk (PREVENT Equations)**
+                   - Uses age, sex, SBP, eGFR, diabetes status, smoking, cholesterol, BMI
+                   - Calculates 10-year risk, converted to monthly probability
+
+                2. **Risk Multipliers Applied:**
+                   - Prior MI: 2.5x MI risk
+                   - Prior Stroke: 3.0x stroke risk
+                   - Prior TIA: 2.0x stroke risk
+                   - SGLT2i: 0.7x HF risk (30% reduction)
+
+                3. **Monthly Probability Formula:**
+                   ```
+                   P_monthly = 1 - (1 - P_annual)^(1/12)
+                   ```
+
+                4. **Event Sampling:**
+                   - Random number U ~ Uniform(0,1) drawn
+                   - If U < P_event, event occurs
+                   - Events are mutually exclusive (first match wins)
+                """)
+
+    with calc_tab2:
+        st.markdown("#### Patient Trajectory Over Time")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # SBP trajectory
+            st.markdown("**Blood Pressure (SBP)**")
+            bp_data = cycles_df[['year', 'sbp']].copy()
+            bp_data.columns = ['Year', 'SBP (mmHg)']
+            bp_data = bp_data.set_index('Year')
+            st.line_chart(bp_data, use_container_width=True)
+
+            st.markdown("""
+            *SBP Update Equation:*
+            ```
+            SBP(t+1) = SBP(t) + 0.05 + ε - treatment_effect
+            ```
+            Where ε ~ N(0, 2) is monthly noise
+            """)
+
+        with col2:
+            # eGFR trajectory
+            st.markdown("**Renal Function (eGFR)**")
+            egfr_data = cycles_df[['year', 'egfr']].copy()
+            egfr_data.columns = ['Year', 'eGFR (mL/min)']
+            egfr_data = egfr_data.set_index('Year')
+            st.line_chart(egfr_data, use_container_width=True)
+
+            st.markdown("""
+            *eGFR Decline Equation:*
+            ```
+            eGFR(t+1) = eGFR(t) - base_decline - sbp_effect
+            ```
+            Where base_decline = 1-1.5 mL/min/year
+            """)
+
+        # Cumulative outcomes
+        st.markdown("**Cumulative Outcomes**")
+        col3, col4 = st.columns(2)
+
+        with col3:
+            costs_data = cycles_df[['year', 'cumulative_costs']].copy()
+            costs_data.columns = ['Year', f'Costs ({currency})']
+            costs_data = costs_data.set_index('Year')
+            st.line_chart(costs_data, use_container_width=True)
+
+        with col4:
+            qalys_data = cycles_df[['year', 'cumulative_qalys']].copy()
+            qalys_data.columns = ['Year', 'QALYs']
+            qalys_data = qalys_data.set_index('Year')
+            st.line_chart(qalys_data, use_container_width=True)
+
+    with calc_tab3:
+        st.markdown("#### Event Log")
+        st.markdown("Events that occurred during the simulation for this patient:")
+
+        # Filter for cycles with events
+        events_df = cycles_df[cycles_df['event'].notna()].copy()
+
+        if not events_df.empty:
+            events_display = events_df[['year', 'event', 'sbp', 'egfr', 'cardiac_state']].copy()
+            events_display.columns = ['Year', 'Event', 'SBP', 'eGFR', 'Resulting State']
+            st.dataframe(events_display, use_container_width=True, hide_index=True)
+        else:
+            st.success("No adverse events occurred for this patient during the simulation.")
+
+        # State transitions
+        st.markdown("#### State Progression")
+        states_df = cycles_df[['year', 'cardiac_state', 'renal_state', 'neuro_state', 'is_adherent']].copy()
+        states_df.columns = ['Year', 'Cardiac', 'Renal', 'Cognitive', 'Adherent']
+        st.dataframe(states_df, use_container_width=True, hide_index=True)
+
+    with calc_tab4:
+        st.markdown("#### Detailed Calculation at Each Time Point")
+        st.markdown("Select a specific time point to see all calculations:")
+
+        # Time point selector
+        time_points = cycles_df['year'].tolist()
+        selected_time = st.select_slider("Select Year", options=time_points, value=time_points[0] if time_points else 0)
+
+        # Get data for selected time
+        time_data = cycles_df[cycles_df['year'] == selected_time].iloc[0] if len(cycles_df[cycles_df['year'] == selected_time]) > 0 else None
+
+        if time_data is not None:
+            col1, col2 = st.columns(2)
+
+            with col1:
+                st.markdown("**Patient State:**")
+                st.markdown(f"""
+                - Age: {time_data['age']:.1f} years
+                - SBP (Office): {time_data['sbp']:.0f} mmHg
+                - True SBP: {time_data['true_sbp']:.0f} mmHg
+                - eGFR: {time_data['egfr']:.1f} mL/min
+                - Adherent: {'Yes' if time_data['is_adherent'] else 'No'}
+                - Treatment Effect: {time_data['treatment_effect']:.1f} mmHg/month
+                """)
+
+                st.markdown("**Current States:**")
+                st.markdown(f"""
+                - Cardiac: `{time_data['cardiac_state']}`
+                - Renal: `{time_data['renal_state']}`
+                - Cognitive: `{time_data['neuro_state']}`
+                """)
+
+            with col2:
+                st.markdown("**Transition Probabilities (Monthly):**")
+                probs = time_data['probs']
+                prob_table = pd.DataFrame([
+                    {'Event': 'MI', 'Probability': f"{probs['p_mi']*100:.4f}%", 'Annual Equiv': f"{(1-(1-probs['p_mi'])**12)*100:.2f}%"},
+                    {'Event': 'Ischemic Stroke', 'Probability': f"{probs['p_ischemic_stroke']*100:.4f}%", 'Annual Equiv': f"{(1-(1-probs['p_ischemic_stroke'])**12)*100:.2f}%"},
+                    {'Event': 'Hemorrhagic Stroke', 'Probability': f"{probs['p_hemorrhagic_stroke']*100:.4f}%", 'Annual Equiv': f"{(1-(1-probs['p_hemorrhagic_stroke'])**12)*100:.2f}%"},
+                    {'Event': 'TIA', 'Probability': f"{probs['p_tia']*100:.4f}%", 'Annual Equiv': f"{(1-(1-probs['p_tia'])**12)*100:.2f}%"},
+                    {'Event': 'Heart Failure', 'Probability': f"{probs['p_hf']*100:.4f}%", 'Annual Equiv': f"{(1-(1-probs['p_hf'])**12)*100:.2f}%"},
+                    {'Event': 'CV Death', 'Probability': f"{probs['p_cv_death']*100:.4f}%", 'Annual Equiv': f"{(1-(1-probs['p_cv_death'])**12)*100:.2f}%"},
+                    {'Event': 'Non-CV Death', 'Probability': f"{probs['p_non_cv_death']*100:.4f}%", 'Annual Equiv': f"{(1-(1-probs['p_non_cv_death'])**12)*100:.2f}%"},
+                ])
+                st.dataframe(prob_table, use_container_width=True, hide_index=True)
+
+            st.markdown("**Outcome This Cycle:**")
+            if time_data['event']:
+                st.error(f"Event occurred: **{time_data['event']}**")
+            else:
+                st.success("No event - patient continues in current state")
+
+            if time_data['adherence_changed']:
+                st.warning("Adherence status changed this cycle")
+            if time_data['neuro_changed']:
+                st.warning("Cognitive state changed this cycle")
+            if time_data['hyperkalemia_stop']:
+                st.error("Treatment stopped due to hyperkalemia (K+ > 5.5)")
+
+
 # ============== MAIN APPLICATION ==============
 
 def main():
@@ -1573,6 +1859,9 @@ def main():
             st.session_state.custom_costs = custom_costs
             st.session_state.treatment_params = treatment_params
             st.session_state.clinical_params = clinical_params
+            # Store simulation logs for calculation visualization
+            st.session_state.sim_log_ixa = getattr(cea_results.intervention, 'simulation_log', {})
+            st.session_state.sim_log_spi = getattr(cea_results.comparator, 'simulation_log', {})
 
     # ============== MAIN CONTENT ==============
     if "cea_results" in st.session_state:
@@ -1591,8 +1880,8 @@ def main():
         st.divider()
 
         # Tabs for different views
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
-            "Outcomes", "Costs", "Charts", "Subgroups", "Risk Stratification", "Trajectories", "Export"
+        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+            "Outcomes", "Costs", "Charts", "Subgroups", "Risk Stratification", "Trajectories", "Calculations", "Export"
         ])
 
         with tab1:
@@ -1620,6 +1909,16 @@ def main():
             display_patient_trajectories(st.session_state.patients_ixa, cea.intervention)
 
         with tab7:
+            # Simulation Calculations tab
+            st.markdown("### Simulation Calculations")
+            calc_arm = st.radio("Select Treatment Arm", ["IXA-001", "Spironolactone"], horizontal=True)
+
+            if calc_arm == "IXA-001":
+                display_simulation_calculations(cea.intervention, currency)
+            else:
+                display_simulation_calculations(cea.comparator, currency)
+
+        with tab8:
             st.markdown("### Export Results")
             st.markdown("Download comprehensive Excel report with all analysis results and parameters used.")
 
