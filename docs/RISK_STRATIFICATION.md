@@ -195,14 +195,17 @@ Calculates **base** monthly event probabilities using:
 The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific multipliers:
 
 **GCUA Phenotypes (age ≥60, eGFR >60):**
-| Phenotype | MI | Stroke | HF | ESRD | Death | Clinical Rationale |
-|-----------|-----|--------|-----|------|-------|-------------------|
-| I (Accelerated Ager) | 1.3× | 1.4× | 1.4× | 1.3× | 1.5× | Multi-organ decline synergy |
-| II (Silent Renal) | 0.9× | 0.95× | 1.1× | 1.4× | 1.2× | Renal-dominant, CV preserved |
-| III (Vascular Dominant) | 1.4× | 1.5× | 1.2× | 0.8× | 1.3× | Atherosclerotic pathway |
-| IV (Senescent) | 1.8× | 2.0× | 2.2× | 1.5× | 2.5× | High competing mortality |
-| Moderate | 1.1× | 1.1× | 1.15× | 1.15× | 1.1× | Intermediate risk |
-| Low | 0.9× | 0.9× | 0.9× | 0.9× | 0.85× | Lower than average |
+
+| Phenotype | MI | Stroke | HF | ESRD | Death | Criteria | Clinical Rationale |
+|-----------|-----|--------|-----|------|-------|----------|-------------------|
+| **I** (Accelerated Ager) | 1.3× | 1.4× | 1.4× | 1.3× | 1.5× | Nelson ≥15% AND CVD ≥20% | High renal + High CV → multi-organ decline synergy |
+| **II** (Silent Renal) | 0.9× | 0.95× | 1.1× | 1.4× | 1.2× | Nelson ≥15% AND CVD <7.5% | High renal + Low CV → renal-dominant, CV preserved |
+| **III** (Vascular Dominant) | 1.4× | 1.5× | 1.2× | 0.8× | 1.3× | Nelson <5% AND CVD ≥20% | Low renal + High CV → atherosclerotic pathway, kidneys protected |
+| **IV** (Senescent) | 1.8× | 2.0× | 2.2× | 1.5× | 2.5× | Mortality ≥50% | Frailty → high competing mortality, de-escalate treatment |
+| **Moderate** | 1.1× | 1.1× | 1.15× | 1.15× | 1.1× | Nelson 5-15% | Intermediate renal risk |
+| **Low** | 0.9× | 0.9× | 0.9× | 0.9× | 0.85× | None of above | Standard preventive care |
+
+> **Note on GCUA III**: These patients have atherosclerotic disease (lipids, smoking) but relatively preserved kidney function. Their ESRD modifier is 0.8× (protective) while MI/Stroke are elevated 1.4-1.5×.
 
 **EOCRI Phenotypes (age 18-59, eGFR >60):**
 | Phenotype | MI | Stroke | HF | ESRD | Death | Clinical Rationale |
