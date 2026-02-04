@@ -532,6 +532,7 @@ def analyze_subgroups(patients: List[Patient], results: SimulationResults, profi
         'eocri': {'A': [], 'B': [], 'C': [], 'Low': []},
         'age': {'<60': [], '60-70': [], '70-80': [], '80+': []},
         'ckd_stage': {'Stage 1-2': [], 'Stage 3a': [], 'Stage 3b': [], 'Stage 4': [], 'ESRD': []},
+        'primary_aldosteronism': {'With PA': [], 'Without PA': []},  # IXA-001 target population
     }
 
     for i, (patient, profile) in enumerate(zip(patients, profiles)):
@@ -580,6 +581,13 @@ def analyze_subgroups(patients: List[Patient], results: SimulationResults, profi
             subgroup_data['ckd_stage']['Stage 4'].append(patient_data)
         elif 'esrd' in str(renal).lower():
             subgroup_data['ckd_stage']['ESRD'].append(patient_data)
+
+        # Primary Aldosteronism (IXA-001 target population - 15-20% of resistant HTN)
+        has_pa = getattr(patient, 'has_primary_aldosteronism', False)
+        if has_pa:
+            subgroup_data['primary_aldosteronism']['With PA'].append(patient_data)
+        else:
+            subgroup_data['primary_aldosteronism']['Without PA'].append(patient_data)
 
     return subgroup_data
 
@@ -1126,7 +1134,7 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
     """Display subgroup analysis results."""
     st.markdown("### Subgroup Analysis")
 
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(["Framingham Risk", "KDIGO Risk", "GCUA Phenotype", "EOCRI Phenotype", "Age Group", "CKD Stage"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Framingham Risk", "KDIGO Risk", "GCUA Phenotype", "EOCRI Phenotype", "Age Group", "CKD Stage", "Primary Aldosteronism"])
 
     with tab1:
         st.markdown("**By Framingham CVD Risk Category**")
@@ -1215,6 +1223,27 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
                 ckd_data.append({'Stage': cat, 'N': n, 'Mean Costs': f"{currency}{mean_costs:,.0f}", 'Mean QALYs': f"{mean_qalys:.3f}"})
         if ckd_data:
             st.dataframe(pd.DataFrame(ckd_data), hide_index=True, use_container_width=True)
+
+    with tab7:
+        st.markdown("**By Primary Aldosteronism Status** (IXA-001 Target Population)")
+        st.markdown("*Primary aldosteronism affects 15-20% of resistant HTN patients and is the core target for aldosterone synthase inhibitors.*")
+        pa_data = []
+        for cat in ['With PA', 'Without PA']:
+            patients = subgroup_data['primary_aldosteronism'][cat]
+            n = len(patients)
+            if n > 0:
+                mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
+                mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
+                pa_data.append({
+                    'Status': cat,
+                    'N': n,
+                    'Proportion': f"{n / sum(len(subgroup_data['primary_aldosteronism'][c]) for c in ['With PA', 'Without PA']) * 100:.1f}%",
+                    'Mean Costs': f"{currency}{mean_costs:,.0f}",
+                    'Mean QALYs': f"{mean_qalys:.3f}"
+                })
+        if pa_data:
+            st.dataframe(pd.DataFrame(pa_data), hide_index=True, use_container_width=True)
+            st.info("💡 Patients with Primary Aldosteronism have ~30% enhanced response to IXA-001 due to aldosterone-driven hypertension.")
 
 
 def display_risk_stratification(profiles: List[BaselineRiskProfile]):
