@@ -112,6 +112,7 @@ The Streamlit interface provides:
 - [Disease Progression Models](#disease-progression-models)
 - [Baseline Risk Stratification](#baseline-risk-stratification)
 - [Patient History Analyzer](#patient-history-analyzer)
+- [Probabilistic Sensitivity Analysis (PSA)](#probabilistic-sensitivity-analysis-psa)
 - [Economic Evaluation](#economic-evaluation)
 - [Technical Implementation](#technical-implementation)
 - [Usage](#usage)
@@ -1016,6 +1017,258 @@ class ComorbidityBurden:
 | Substance use | 1.8-2.5 | 2.5-4.0 | Piano 2017 |
 | Atrial fibrillation | 2.0-3.0 | 1.5-2.0 | Kirchhof 2016 |
 | PAD | 2.5-3.0 | 2.0-2.5 | Criqui 2015 |
+
+---
+
+## Probabilistic Sensitivity Analysis (PSA)
+
+The model includes a comprehensive PSA module (`src/psa.py`) that addresses parameter uncertainty through a rigorous nested-loop approach with Cholesky decomposition for correlated parameters.
+
+### Two Types of Uncertainty in Microsimulation
+
+```
+┌─────────────────────────────────┐    ┌─────────────────────────────────┐
+│  FIRST-ORDER UNCERTAINTY        │    │  SECOND-ORDER UNCERTAINTY       │
+│  (Stochastic / Patient-Level)   │    │  (Parameter / Epistemic)        │
+├─────────────────────────────────┤    ├─────────────────────────────────┤
+│ Random variation in individual  │    │ Uncertainty in the TRUE values  │
+│ outcomes even with FIXED        │    │ of model parameters             │
+│ parameters                      │    │                                 │
+│                                 │    │ Examples:                       │
+│ Examples:                       │    │ - Treatment effect (20±5 mmHg)  │
+│ - Will THIS patient have an MI? │    │ - Event costs ($25K±$5K)        │
+│ - Bernoulli sampling of events  │    │ - Utility decrements            │
+└─────────────────────────────────┘    └─────────────────────────────────┘
+```
+
+**PSA addresses second-order uncertainty** while properly accounting for first-order stochasticity through sufficient sample sizes.
+
+### PSA Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         PSA WORKFLOW                                 │
+└─────────────────────────────────────────────────────────────────────┘
+
+1. PARAMETER SAMPLING (Cholesky decomposition for correlations)
+   │
+   ├── Correlated Groups:
+   │   ├── Acute Costs (MI, Stroke, HF) - ρ = 0.5-0.8
+   │   ├── Utilities (post-MI, post-stroke, HF, ESRD) - ρ = 0.4-0.6
+   │   └── Risk Ratios (MI, Stroke, HF per 10mmHg) - ρ = 0.4-0.5
+   │
+   └── Independent: Treatment effects, discontinuation rates, phenotype modifiers
+
+2. NESTED LOOP PSA
+   │
+   ├── Outer Loop: K parameter samples (e.g., 1,000)
+   │   │
+   │   └── Inner Loop: N patients per arm (e.g., 1,000)
+   │       │
+   │       ├── IXA-001 arm (seed = base + k)
+   │       └── Spironolactone arm (seed = base + k)  ← SAME SEED (CRN)
+   │
+   └── Record: ΔCosts, ΔQALYs for each iteration k
+
+3. OUTPUTS
+   │
+   ├── Summary Statistics (mean, SD, 95% CI for costs, QALYs, ICER)
+   ├── Cost-Effectiveness Plane (scatter plot of ΔCost vs ΔQALYs)
+   ├── CEAC (probability cost-effective at each WTP threshold)
+   ├── EVPI (expected value of perfect information)
+   └── Parameter Importance (correlation with net monetary benefit)
+```
+
+### Cholesky Decomposition for Correlated Parameters
+
+When parameters share common drivers (e.g., hospital costs affect all acute events), they must be sampled with appropriate correlations:
+
+```
+PROBLEM: MI cost and Stroke cost are correlated (ρ = 0.7)
+         If hospitals are expensive, BOTH events cost more
+
+SOLUTION: Cholesky decomposition
+
+Step 1: Define correlation matrix Σ
+Step 2: Compute Cholesky factor L where Σ = L × Lᵀ
+Step 3: Generate independent standard normals Z
+Step 4: Transform to correlated normals: X = L × Z
+Step 5: Apply inverse CDF to get target marginal distributions
+```
+
+**Default Correlation Groups:**
+
+| Group | Parameters | Correlations | Rationale |
+|-------|------------|--------------|-----------|
+| **Acute Costs** | MI, Ischemic Stroke, Hemorrhagic Stroke, HF | 0.5-0.8 | Common hospital cost drivers |
+| **Utilities** | Post-MI, Post-Stroke, Chronic HF, ESRD | 0.4-0.6 | Common EQ-5D measurement approach |
+| **Risk Ratios** | RR per 10mmHg for MI, Stroke, HF | 0.4-0.5 | Shared evidence from BP meta-analyses |
+
+### Common Random Numbers (CRN)
+
+To reduce variance in incremental outcomes, the same patient random seeds are used for both treatment arms:
+
+```python
+# Same random stream for both arms within each parameter iteration
+for k in range(K_iterations):
+    params = sample_parameters()
+    seed = base_seed + k
+
+    results_ixa = simulate(patients, treatment="IXA-001", seed=seed)
+    results_soc = simulate(patients, treatment="Spironolactone", seed=seed)
+
+    # Incremental is more precise because patient-level noise cancels
+    delta_cost[k] = results_ixa.cost - results_soc.cost
+    delta_qaly[k] = results_ixa.qaly - results_soc.qaly
+```
+
+**Effect:** Reduces variance of incremental estimates by 50-90%.
+
+### Default Parameter Distributions
+
+| Parameter | Distribution | Mean | SD/Shape | Rationale |
+|-----------|-------------|------|----------|-----------|
+| **IXA-001 SBP reduction** | Normal | 20 mmHg | 2 | Trial SE |
+| **Spironolactone SBP reduction** | Normal | 9 mmHg | 1.5 | PATHWAY-2 |
+| **RR Stroke per 10mmHg** | Lognormal | 0.64 | σ=0.06 | Meta-analysis |
+| **RR MI per 10mmHg** | Lognormal | 0.78 | σ=0.05 | Meta-analysis |
+| **Acute MI cost** | Gamma | $25,000 | shape=25 | Claims data |
+| **Utility post-MI** | Beta | 0.88 | α=70, β=10 | EQ-5D studies |
+| **PA response modifier** | Lognormal | 1.30 | σ=0.1 | Expert opinion |
+
+### PSA Outputs
+
+**1. Cost-Effectiveness Acceptability Curve (CEAC)**
+
+```
+P(Cost-Effective) = P(λ × ΔQALYs - ΔCosts > 0)
+
+WTP Threshold    Probability CE
+$50,000/QALY     28%
+$100,000/QALY    46%
+$150,000/QALY    56%
+```
+
+**2. Expected Value of Perfect Information (EVPI)**
+
+```
+EVPI = E[max(NMB_intervention, NMB_comparator)] - max(E[NMB])
+
+At $100,000/QALY WTP:
+  Per patient: $14,011
+  Population (11,000 patients): $154 million
+```
+
+**3. Parameter Importance**
+
+Parameters ranked by correlation with Net Monetary Benefit:
+
+| Parameter | Correlation with NMB |
+|-----------|---------------------|
+| Spironolactone SBP SD | 0.52 |
+| Hemorrhagic stroke cost | 0.46 |
+| MI acute cost | 0.32 |
+| Spironolactone SBP mean | -0.27 |
+
+### Running PSA
+
+**Quick Start:**
+
+```bash
+# Run PSA demo (50 iterations, 100 patients per iteration)
+python run_psa_demo.py --iterations 50 --patients 100 --seed 42
+
+# Export results to CSV
+python run_psa_demo.py --iterations 100 --patients 200 --export
+
+# Full PSA for HTA submission (recommended)
+python run_psa_demo.py --iterations 1000 --patients 1000 --export
+```
+
+**Programmatic Usage:**
+
+```python
+from src.psa import run_psa, print_psa_summary, PSARunner
+
+# Quick run
+results = run_psa(
+    n_patients=500,
+    n_iterations=1000,
+    time_horizon_years=40,
+    seed=42
+)
+
+# Print summary
+print_psa_summary(results)
+
+# Get CEAC data
+ceac = results.generate_ceac()
+
+# Calculate EVPI
+evpi = results.calculate_evpi(wtp_threshold=100000, population_size=11000)
+
+# Export to DataFrame
+df = results.to_dataframe()
+df.to_csv("psa_results.csv")
+```
+
+**Custom Parameter Distributions:**
+
+```python
+from src.psa import PSARunner, ParameterDistribution, CorrelationGroup
+import numpy as np
+
+# Define custom distributions
+custom_distributions = {
+    'ixa_sbp_mean': ParameterDistribution(
+        name='ixa_sbp_mean',
+        distribution='normal',
+        params={'mean': 22.0, 'sd': 3.0},  # Updated from new trial data
+        description='IXA-001 SBP reduction'
+    ),
+}
+
+# Define custom correlations
+custom_correlations = {
+    'my_group': CorrelationGroup(
+        name='my_group',
+        parameters=['param_a', 'param_b'],
+        correlation_matrix=np.array([[1.0, 0.6], [0.6, 1.0]])
+    )
+}
+
+# Run with custom settings
+runner = PSARunner(config, distributions=custom_distributions,
+                   correlation_groups=custom_correlations)
+results = runner.run(n_iterations=1000)
+```
+
+### PSA Output Files
+
+When using `--export`, the following files are generated:
+
+| File | Description |
+|------|-------------|
+| `psa_iterations.csv` | Full iteration data (costs, QALYs, all sampled parameters) |
+| `psa_ceac.csv` | CEAC data (WTP threshold, probability CE) |
+| `psa_evpi.csv` | EVPI curve (WTP threshold, EVPI value) |
+| `psa_summary.csv` | Summary statistics |
+| `psa_ce_plane.png` | Cost-effectiveness plane scatter plot |
+| `psa_ceac.png` | CEAC visualization |
+| `psa_evpi.png` | EVPI curve visualization |
+
+### Computational Considerations
+
+| Configuration | Iterations × Patients | Runtime | Use Case |
+|---------------|----------------------|---------|----------|
+| Quick demo | 50 × 100 | ~4 min | Testing, debugging |
+| Standard | 500 × 500 | ~2 hours | Internal analysis |
+| HTA submission | 1000 × 1000 | ~8 hours | Formal submission |
+
+**Tips for Large Runs:**
+- Use `show_progress=True` to monitor progress
+- Run overnight for HTA-quality analyses
+- Results are deterministic with fixed seed (reproducible)
 
 ---
 

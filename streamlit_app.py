@@ -25,6 +25,11 @@ from src.patient import Patient, CardiacState, RenalState, NeuroState
 from src.simulation import Simulation, SimulationConfig, SimulationResults
 from src.risk_assessment import BaselineRiskProfile
 from src.costs.costs import CostInputs, US_COSTS, UK_COSTS
+from src.psa import (
+    PSARunner, PSAResults, PSAIteration,
+    ParameterDistribution, CorrelationGroup, CholeskySampler,
+    get_default_parameter_distributions, get_default_correlation_groups
+)
 
 # Page configuration
 st.set_page_config(
@@ -1340,6 +1345,156 @@ def display_ce_plane(cea: CEAResults, currency: str):
         st.error("**Quadrant: Northwest (Dominated)** - IXA-001 is less effective and more costly")
 
 
+def display_patient_scatter(cea: CEAResults, currency: str):
+    """Display patient-level scatter plot of costs vs QALYs."""
+    import matplotlib.pyplot as plt
+
+    st.markdown("### Patient-Level Scatter Plot")
+    st.markdown("Individual patient outcomes showing first-order (stochastic) variability.")
+
+    # Get patient-level data
+    ixa_data = cea.intervention.patient_results
+    spi_data = cea.comparator.patient_results
+
+    if not ixa_data or not spi_data:
+        st.warning("Patient-level data not available for scatter plot.")
+        return
+
+    # Extract costs and QALYs
+    ixa_costs = [p.get('cumulative_costs', 0) for p in ixa_data]
+    ixa_qalys = [p.get('cumulative_qalys', 0) for p in ixa_data]
+    spi_costs = [p.get('cumulative_costs', 0) for p in spi_data]
+    spi_qalys = [p.get('cumulative_qalys', 0) for p in spi_data]
+
+    # Plot options
+    plot_type = st.radio(
+        "View",
+        ["Both Arms (Absolute)", "Incremental (Paired)", "Distribution"],
+        horizontal=True
+    )
+
+    if plot_type == "Both Arms (Absolute)":
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+        ax.scatter(ixa_qalys, ixa_costs, alpha=0.4, s=20, c='steelblue', label='IXA-001')
+        ax.scatter(spi_qalys, spi_costs, alpha=0.4, s=20, c='coral', label='Spironolactone')
+
+        # Mark means
+        ax.scatter([np.mean(ixa_qalys)], [np.mean(ixa_costs)], s=200, c='steelblue',
+                   marker='*', edgecolors='black', linewidths=1, label=f'IXA-001 Mean', zorder=5)
+        ax.scatter([np.mean(spi_qalys)], [np.mean(spi_costs)], s=200, c='coral',
+                   marker='*', edgecolors='black', linewidths=1, label=f'Spiro Mean', zorder=5)
+
+        ax.set_xlabel('QALYs', fontsize=12)
+        ax.set_ylabel(f'Total Costs ({currency})', fontsize=12)
+        ax.set_title('Patient-Level Costs vs QALYs\nby Treatment Arm', fontsize=14)
+        ax.legend(loc='upper left')
+        ax.grid(True, alpha=0.3)
+
+        st.pyplot(fig)
+        plt.close()
+
+    elif plot_type == "Incremental (Paired)":
+        # Paired incremental analysis (assumes same patient order)
+        n_patients = min(len(ixa_costs), len(spi_costs))
+        delta_costs = [ixa_costs[i] - spi_costs[i] for i in range(n_patients)]
+        delta_qalys = [ixa_qalys[i] - spi_qalys[i] for i in range(n_patients)]
+
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+        ax.scatter(delta_qalys, delta_costs, alpha=0.5, s=25, c='purple')
+
+        # WTP threshold line
+        wtp = 100000
+        x_range = np.array([min(delta_qalys) - 0.5, max(delta_qalys) + 0.5])
+        ax.plot(x_range, wtp * x_range, 'r--', linewidth=2, label=f'WTP = {currency}{wtp:,}/QALY')
+
+        # Reference lines
+        ax.axhline(y=0, color='gray', linewidth=0.8)
+        ax.axvline(x=0, color='gray', linewidth=0.8)
+
+        # Mark mean
+        ax.scatter([np.mean(delta_qalys)], [np.mean(delta_costs)], s=200, c='gold',
+                   marker='*', edgecolors='black', linewidths=1, label='Mean', zorder=5)
+
+        ax.set_xlabel('Incremental QALYs (IXA-001 - Spiro)', fontsize=12)
+        ax.set_ylabel(f'Incremental Costs ({currency})', fontsize=12)
+        ax.set_title('Patient-Level Incremental Cost-Effectiveness\n(Paired Analysis with Common Random Numbers)', fontsize=14)
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+
+        # Quadrant labels
+        ax.text(0.02, 0.98, 'NW\nDominated', transform=ax.transAxes,
+                fontsize=9, va='top', ha='left', color='gray')
+        ax.text(0.98, 0.98, 'NE\nMore costly,\nmore effective', transform=ax.transAxes,
+                fontsize=9, va='top', ha='right', color='gray')
+        ax.text(0.02, 0.02, 'SW\nLess costly,\nless effective', transform=ax.transAxes,
+                fontsize=9, va='bottom', ha='left', color='gray')
+        ax.text(0.98, 0.02, 'SE\nDominant', transform=ax.transAxes,
+                fontsize=9, va='bottom', ha='right', color='gray')
+
+        st.pyplot(fig)
+        plt.close()
+
+        # Summary statistics
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            pct_qaly_gain = sum(1 for d in delta_qalys if d > 0) / len(delta_qalys) * 100
+            st.metric("% with QALY Gain", f"{pct_qaly_gain:.1f}%")
+        with col2:
+            pct_cost_saving = sum(1 for d in delta_costs if d < 0) / len(delta_costs) * 100
+            st.metric("% with Cost Saving", f"{pct_cost_saving:.1f}%")
+        with col3:
+            pct_dominant = sum(1 for i in range(len(delta_qalys)) if delta_qalys[i] > 0 and delta_costs[i] < 0) / len(delta_qalys) * 100
+            st.metric("% Dominant (SE)", f"{pct_dominant:.1f}%")
+
+    else:  # Distribution
+        fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+
+        # QALYs distribution
+        axes[0].hist(ixa_qalys, bins=30, alpha=0.6, label='IXA-001', color='steelblue')
+        axes[0].hist(spi_qalys, bins=30, alpha=0.6, label='Spironolactone', color='coral')
+        axes[0].axvline(np.mean(ixa_qalys), color='steelblue', linestyle='--', linewidth=2)
+        axes[0].axvline(np.mean(spi_qalys), color='coral', linestyle='--', linewidth=2)
+        axes[0].set_xlabel('QALYs', fontsize=12)
+        axes[0].set_ylabel('Frequency', fontsize=12)
+        axes[0].set_title('Distribution of QALYs', fontsize=14)
+        axes[0].legend()
+
+        # Costs distribution
+        axes[1].hist(ixa_costs, bins=30, alpha=0.6, label='IXA-001', color='steelblue')
+        axes[1].hist(spi_costs, bins=30, alpha=0.6, label='Spironolactone', color='coral')
+        axes[1].axvline(np.mean(ixa_costs), color='steelblue', linestyle='--', linewidth=2)
+        axes[1].axvline(np.mean(spi_costs), color='coral', linestyle='--', linewidth=2)
+        axes[1].set_xlabel(f'Total Costs ({currency})', fontsize=12)
+        axes[1].set_ylabel('Frequency', fontsize=12)
+        axes[1].set_title('Distribution of Costs', fontsize=14)
+        axes[1].legend()
+
+        plt.tight_layout()
+        st.pyplot(fig)
+        plt.close()
+
+        # Summary statistics table
+        st.markdown("#### Summary Statistics")
+        summary_df = pd.DataFrame({
+            'Metric': ['Mean QALYs', 'SD QALYs', 'Mean Costs', 'SD Costs'],
+            'IXA-001': [
+                f"{np.mean(ixa_qalys):.3f}",
+                f"{np.std(ixa_qalys):.3f}",
+                f"{currency}{np.mean(ixa_costs):,.0f}",
+                f"{currency}{np.std(ixa_costs):,.0f}"
+            ],
+            'Spironolactone': [
+                f"{np.mean(spi_qalys):.3f}",
+                f"{np.std(spi_qalys):.3f}",
+                f"{currency}{np.mean(spi_costs):,.0f}",
+                f"{currency}{np.std(spi_costs):,.0f}"
+            ]
+        })
+        st.dataframe(summary_df, use_container_width=True, hide_index=True)
+
+
 def display_wtp_analysis(cea: CEAResults, currency: str):
     """Display willingness-to-pay analysis."""
     st.markdown("### Willingness-to-Pay Analysis")
@@ -1667,6 +1822,307 @@ def display_simulation_calculations(results: SimulationResults, currency: str, s
                 st.error("Treatment stopped due to hyperkalemia (K+ > 5.5)")
 
 
+# ============== PSA DISPLAY FUNCTIONS ==============
+
+def run_psa_with_progress(
+    n_iterations: int,
+    n_patients: int,
+    time_horizon: int,
+    seed: int,
+    discount_rate: float,
+    progress_container
+) -> PSAResults:
+    """Run PSA with Streamlit progress updates."""
+    import time
+
+    # Create base simulation config
+    config = SimulationConfig(
+        n_patients=n_patients,
+        time_horizon_months=time_horizon * 12,
+        seed=seed,
+        discount_rate=discount_rate,
+        show_progress=False
+    )
+
+    # Initialize PSA runner
+    runner = PSARunner(base_config=config, seed=seed)
+
+    # Sample all parameter sets
+    parameter_samples = runner.sampler.sample(n_iterations)
+
+    iterations = []
+    progress_bar = progress_container.progress(0, text="Running PSA...")
+
+    for k in range(n_iterations):
+        # Extract parameters for this iteration
+        params_k = {name: values[k] for name, values in parameter_samples.items()}
+
+        # Run simulation with these parameters
+        result = runner._run_single_iteration(
+            iteration=k,
+            parameters=params_k,
+            use_crn=True
+        )
+        iterations.append(result)
+
+        # Update progress
+        pct = int((k + 1) / n_iterations * 100)
+        progress_bar.progress(pct / 100, text=f"PSA Iteration {k+1}/{n_iterations} ({pct}%)")
+
+    progress_bar.progress(1.0, text="PSA Complete!")
+
+    return PSAResults(
+        iterations=iterations,
+        n_patients_per_iteration=n_patients,
+        intervention_name="IXA-001",
+        comparator_name="Spironolactone"
+    )
+
+
+def display_psa_results(results: PSAResults, currency: str = "$"):
+    """Display PSA results with visualizations."""
+    import matplotlib.pyplot as plt
+
+    stats = results.get_summary_statistics()
+
+    # Summary metrics
+    st.markdown("### PSA Summary Statistics")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    with col1:
+        st.metric(
+            "Mean Incremental Costs",
+            f"{currency}{stats['delta_costs_mean']:,.0f}",
+            delta=f"SD: {currency}{stats['delta_costs_sd']:,.0f}"
+        )
+
+    with col2:
+        st.metric(
+            "Mean Incremental QALYs",
+            f"{stats['delta_qalys_mean']:.3f}",
+            delta=f"SD: {stats['delta_qalys_sd']:.3f}"
+        )
+
+    with col3:
+        if stats['icer_median']:
+            st.metric(
+                "Median ICER",
+                f"{currency}{stats['icer_median']:,.0f}/QALY"
+            )
+        else:
+            st.metric("Median ICER", "N/A")
+
+    with col4:
+        st.metric(
+            "% with QALY Gain",
+            f"{stats['prop_qaly_gain']*100:.1f}%"
+        )
+
+    st.divider()
+
+    # Cost-effectiveness probabilities
+    st.markdown("### Probability Cost-Effective")
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric(f"At {currency}50,000/QALY", f"{stats['prop_ce_50k']*100:.1f}%")
+    with col2:
+        st.metric(f"At {currency}100,000/QALY", f"{stats['prop_ce_100k']*100:.1f}%")
+    with col3:
+        st.metric(f"At {currency}150,000/QALY", f"{stats['prop_ce_150k']*100:.1f}%")
+
+    st.divider()
+
+    # Visualizations in tabs
+    viz_tab1, viz_tab2, viz_tab3, viz_tab4 = st.tabs([
+        "CE Plane", "CEAC", "EVPI", "Parameter Importance"
+    ])
+
+    with viz_tab1:
+        st.markdown("### Cost-Effectiveness Plane")
+        fig, ax = plt.subplots(figsize=(10, 7))
+
+        # Plot scatter
+        ax.scatter(results.delta_qalys, results.delta_costs, alpha=0.5, s=30, c='steelblue')
+
+        # Add WTP threshold line
+        wtp = 100000
+        x_range = np.array([min(results.delta_qalys.min(), -0.5), max(results.delta_qalys.max(), 1.0)])
+        ax.plot(x_range, wtp * x_range, 'r--', linewidth=2, label=f'WTP = {currency}{wtp:,}/QALY')
+
+        # Reference lines
+        ax.axhline(y=0, color='gray', linewidth=0.5)
+        ax.axvline(x=0, color='gray', linewidth=0.5)
+
+        ax.set_xlabel('Incremental QALYs', fontsize=12)
+        ax.set_ylabel(f'Incremental Costs ({currency})', fontsize=12)
+        ax.set_title('Cost-Effectiveness Plane\nIXA-001 vs Spironolactone', fontsize=14)
+        ax.legend()
+
+        # Quadrant labels
+        ax.text(0.02, 0.98, 'NW\nMore costly,\nless effective', transform=ax.transAxes,
+                fontsize=9, va='top', ha='left', color='gray')
+        ax.text(0.98, 0.98, 'NE\nMore costly,\nmore effective', transform=ax.transAxes,
+                fontsize=9, va='top', ha='right', color='gray')
+        ax.text(0.02, 0.02, 'SW\nLess costly,\nless effective', transform=ax.transAxes,
+                fontsize=9, va='bottom', ha='left', color='gray')
+        ax.text(0.98, 0.02, 'SE\nDominant\n(Less costly, more effective)', transform=ax.transAxes,
+                fontsize=9, va='bottom', ha='right', color='gray')
+
+        st.pyplot(fig)
+        plt.close()
+
+    with viz_tab2:
+        st.markdown("### Cost-Effectiveness Acceptability Curve")
+        ceac_data = results.generate_ceac()
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(ceac_data['wtp'] / 1000, ceac_data['probability_ce'], 'b-', linewidth=2)
+        ax.axhline(y=0.5, color='gray', linestyle='--', linewidth=1)
+
+        # Mark key thresholds
+        for threshold in [50000, 100000, 150000]:
+            prob = results.probability_cost_effective(threshold)
+            ax.axvline(x=threshold/1000, color='lightgray', linestyle=':', linewidth=1)
+
+        ax.set_xlabel(f'Willingness-to-Pay Threshold ({currency}1,000/QALY)', fontsize=12)
+        ax.set_ylabel('Probability Cost-Effective', fontsize=12)
+        ax.set_title('Cost-Effectiveness Acceptability Curve\nIXA-001 vs Spironolactone', fontsize=14)
+        ax.set_ylim(0, 1)
+        ax.set_xlim(0, 200)
+        ax.grid(True, alpha=0.3)
+
+        st.pyplot(fig)
+        plt.close()
+
+        # CEAC data table
+        with st.expander("CEAC Data Table"):
+            display_ceac = ceac_data[ceac_data['wtp'].isin([0, 25000, 50000, 75000, 100000, 150000, 200000])].copy()
+            display_ceac['wtp'] = display_ceac['wtp'].apply(lambda x: f"{currency}{x:,.0f}")
+            display_ceac['probability_ce'] = display_ceac['probability_ce'].apply(lambda x: f"{x*100:.1f}%")
+            display_ceac.columns = ['WTP Threshold', 'Probability CE']
+            st.dataframe(display_ceac, use_container_width=True, hide_index=True)
+
+    with viz_tab3:
+        st.markdown("### Expected Value of Perfect Information (EVPI)")
+
+        # Population EVPI (assuming 11,000 eligible patients)
+        population_size = st.number_input("Target Population Size", min_value=1000, max_value=1000000, value=11000, step=1000)
+
+        evpi_data = results.generate_evpi_curve(population_size=1.0)
+        evpi_data['population_evpi'] = evpi_data['evpi'] * population_size
+
+        fig, ax = plt.subplots(figsize=(10, 6))
+        ax.plot(evpi_data['wtp'] / 1000, evpi_data['population_evpi'] / 1e6, 'g-', linewidth=2)
+
+        ax.set_xlabel(f'Willingness-to-Pay Threshold ({currency}1,000/QALY)', fontsize=12)
+        ax.set_ylabel(f'EVPI ({currency} millions)', fontsize=12)
+        ax.set_title(f'Expected Value of Perfect Information\n(Population = {population_size:,})', fontsize=14)
+        ax.set_xlim(0, 200)
+        ax.grid(True, alpha=0.3)
+
+        st.pyplot(fig)
+        plt.close()
+
+        # EVPI summary
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            evpi_50k = results.calculate_evpi(50000, population_size=population_size)
+            st.metric(f"EVPI at {currency}50k/QALY", f"{currency}{evpi_50k/1e6:.1f}M")
+        with col2:
+            evpi_100k = results.calculate_evpi(100000, population_size=population_size)
+            st.metric(f"EVPI at {currency}100k/QALY", f"{currency}{evpi_100k/1e6:.1f}M")
+        with col3:
+            evpi_150k = results.calculate_evpi(150000, population_size=population_size)
+            st.metric(f"EVPI at {currency}150k/QALY", f"{currency}{evpi_150k/1e6:.1f}M")
+
+    with viz_tab4:
+        st.markdown("### Parameter Importance Analysis")
+        st.markdown("Correlation between sampled parameter values and Net Monetary Benefit (NMB) at $100k/QALY threshold.")
+
+        importance = results.parameter_importance(wtp_threshold=100000)
+
+        if not importance.empty:
+            # Top 10 most influential parameters
+            top_10 = importance.head(10)
+
+            fig, ax = plt.subplots(figsize=(10, 6))
+            colors = ['steelblue' if x > 0 else 'coral' for x in top_10['correlation_with_nmb']]
+            bars = ax.barh(range(len(top_10)), top_10['abs_correlation'], color=colors)
+            ax.set_yticks(range(len(top_10)))
+            ax.set_yticklabels(top_10['parameter'])
+            ax.invert_yaxis()
+            ax.set_xlabel('Absolute Correlation with NMB', fontsize=12)
+            ax.set_title('Top 10 Most Influential Parameters', fontsize=14)
+            ax.axvline(x=0, color='gray', linewidth=0.5)
+
+            # Add correlation values as labels
+            for i, (idx, row) in enumerate(top_10.iterrows()):
+                ax.text(row['abs_correlation'] + 0.01, i, f"{row['correlation_with_nmb']:.3f}", va='center', fontsize=9)
+
+            st.pyplot(fig)
+            plt.close()
+
+            # Full table
+            with st.expander("Full Parameter Importance Table"):
+                display_imp = importance.copy()
+                display_imp['correlation_with_nmb'] = display_imp['correlation_with_nmb'].apply(lambda x: f"{x:.4f}")
+                display_imp['abs_correlation'] = display_imp['abs_correlation'].apply(lambda x: f"{x:.4f}")
+                st.dataframe(display_imp, use_container_width=True, hide_index=True)
+        else:
+            st.info("Parameter importance data not available.")
+
+    # Export options
+    st.divider()
+    st.markdown("### Export PSA Results")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        # Iterations CSV
+        iterations_df = pd.DataFrame([{
+            'iteration': it.iteration,
+            'delta_costs': it.delta_costs,
+            'delta_qalys': it.delta_qalys,
+            'icer': it.icer,
+            'nmb_50k': 50000 * it.delta_qalys - it.delta_costs,
+            'nmb_100k': 100000 * it.delta_qalys - it.delta_costs,
+            'ixa_costs': it.ixa_costs,
+            'ixa_qalys': it.ixa_qalys,
+            'comparator_costs': it.comparator_costs,
+            'comparator_qalys': it.comparator_qalys
+        } for it in results.iterations])
+
+        csv = iterations_df.to_csv(index=False)
+        st.download_button(
+            label="Download Iterations CSV",
+            data=csv,
+            file_name="psa_iterations.csv",
+            mime="text/csv"
+        )
+
+    with col2:
+        # CEAC CSV
+        ceac_csv = results.generate_ceac().to_csv(index=False)
+        st.download_button(
+            label="Download CEAC CSV",
+            data=ceac_csv,
+            file_name="psa_ceac.csv",
+            mime="text/csv"
+        )
+
+    with col3:
+        # EVPI CSV
+        evpi_csv = results.generate_evpi().to_csv(index=False)
+        st.download_button(
+            label="Download EVPI CSV",
+            data=evpi_csv,
+            file_name="psa_evpi.csv",
+            mime="text/csv"
+        )
+
+
 # ============== MAIN APPLICATION ==============
 
 def main():
@@ -1968,113 +2424,244 @@ def main():
         treatment_params = st.session_state.get('treatment_params')
         clinical_params = st.session_state.get('clinical_params')
 
-        # Key metrics
-        display_key_metrics(cea, currency)
+        # Check if we're in PSA mode
+        if st.session_state.get('psa_mode', False):
+            # PSA MODE - Show PSA interface as main content
+            st.markdown("## Probabilistic Sensitivity Analysis (PSA)")
 
-        st.divider()
-
-        # Tabs for different views
-        tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-            "Outcomes", "Costs", "Charts", "Subgroups", "Risk Stratification", "Trajectories", "Calculations", "Export"
-        ])
-
-        with tab1:
-            display_outcomes_table(cea, currency)
-            st.divider()
-            display_medication_adherence(cea)
-
-        with tab2:
-            display_detailed_costs(cea, currency)
-            st.divider()
-            display_wtp_analysis(cea, currency)
-
-        with tab3:
-            display_event_charts(cea)
-            st.divider()
-            display_ce_plane(cea, currency)
-
-        with tab4:
-            display_subgroup_analysis(subgroup_data, currency)
-
-        with tab5:
-            display_risk_stratification(profiles)
-
-        with tab6:
-            display_patient_trajectories(st.session_state.patients_ixa, cea.intervention)
-
-        with tab7:
-            # Simulation Calculations tab
-            st.markdown("### Simulation Calculations")
-            calc_arm = st.radio("Select Treatment Arm", ["IXA-001", "Spironolactone"], horizontal=True)
-
-            # Get simulation logs from session state
-            sim_log_ixa = st.session_state.get('sim_log_ixa', {})
-            sim_log_spi = st.session_state.get('sim_log_spi', {})
-
-            if calc_arm == "IXA-001":
-                display_simulation_calculations(cea.intervention, currency, sim_log_ixa)
-            else:
-                display_simulation_calculations(cea.comparator, currency, sim_log_spi)
-
-        with tab8:
-            st.markdown("### Export Results")
-            st.markdown("Download comprehensive Excel report with all analysis results and parameters used.")
-
-            excel_buffer = generate_excel_report(cea, pp, subgroup_data, currency, custom_costs, treatment_params, clinical_params)
-            st.download_button(
-                label="Download Excel Report",
-                data=excel_buffer,
-                file_name="CEA_Microsimulation_Report.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                type="primary"
-            )
+            # Back button to return to main results
+            if st.button("← Back to Main Results", type="secondary"):
+                st.session_state.psa_mode = False
+                st.rerun()
 
             st.markdown("""
-            **Report Contents:**
-            - Executive Summary with key results
-            - Clinical Events comparison with charts
-            - Cost Analysis (direct & indirect)
-            - Subgroup Analysis by risk categories
-            - Willingness-to-Pay Analysis
-            - All Simulation Parameters used
+            PSA quantifies **parameter uncertainty** by sampling model parameters from probability distributions
+            and running multiple simulations. This generates distributions of outcomes rather than point estimates.
             """)
 
-        # Summary box
-        st.divider()
-        st.markdown("### Summary")
+            st.divider()
 
-        col1, col2, col3 = st.columns(3)
+            # PSA Configuration
+            st.markdown("#### PSA Configuration")
 
-        with col1:
-            st.markdown(f"""
-            **Simulation Parameters:**
-            - Cohort size: {n_patients:,} patients per arm
-            - Time horizon: {time_horizon} years
-            - Perspective: {perspective}
-            - Discount rate: {discount_rate*100:.1f}% per annum
-            """)
+            psa_col1, psa_col2, psa_col3 = st.columns(3)
 
-        with col2:
-            st.markdown(f"""
-            **Population Characteristics:**
-            - Mean age: {pp.age_mean:.0f} years (SD {pp.age_sd:.0f})
-            - Male: {pp.prop_male*100:.0f}%
-            - Mean SBP: {pp.sbp_mean:.0f} mmHg
-            - Mean eGFR: {pp.egfr_mean:.0f} mL/min
-            - Diabetes: {pp.diabetes_prev*100:.0f}%
-            """)
+            with psa_col1:
+                psa_iterations = st.number_input(
+                    "Number of Iterations",
+                    min_value=10,
+                    max_value=1000,
+                    value=st.session_state.get('psa_iterations', 50),
+                    step=10,
+                    help="Number of parameter samples (outer loop). More iterations = more stable results but longer runtime.",
+                    key="psa_iter_input"
+                )
+                st.session_state.psa_iterations = psa_iterations
 
-        with col3:
-            events_avoided = cea.comparator.stroke_events - cea.intervention.stroke_events
-            mi_avoided = cea.comparator.mi_events - cea.intervention.mi_events
+            with psa_col2:
+                psa_patients = st.number_input(
+                    "Patients per Iteration",
+                    min_value=50,
+                    max_value=500,
+                    value=st.session_state.get('psa_patients', 100),
+                    step=50,
+                    help="Patients per arm per iteration (inner loop). Affects first-order uncertainty.",
+                    key="psa_pat_input"
+                )
+                st.session_state.psa_patients = psa_patients
 
-            st.markdown(f"""
-            **Key Findings:**
-            - Strokes avoided: {events_avoided:,}
-            - MIs avoided: {mi_avoided:,}
-            - Additional QALYs: {cea.incremental_qalys:.2f}
-            - Additional cost: {currency}{cea.incremental_costs:,.0f}
-            """)
+            with psa_col3:
+                psa_seed = st.number_input(
+                    "PSA Random Seed",
+                    min_value=1,
+                    max_value=99999,
+                    value=st.session_state.get('psa_seed', seed),
+                    help="Seed for reproducibility.",
+                    key="psa_seed_input"
+                )
+                st.session_state.psa_seed = psa_seed
+
+            # Estimate runtime
+            estimated_time = psa_iterations * psa_patients * 0.05
+            st.caption(f"Estimated runtime: ~{estimated_time/60:.1f} minutes ({psa_iterations} iterations x {psa_patients} patients x 2 arms)")
+
+            st.divider()
+
+            # Run PSA button
+            if st.button("Run PSA", type="primary", use_container_width=True, key="run_psa_main"):
+                progress_container = st.container()
+
+                with st.spinner("Running Probabilistic Sensitivity Analysis..."):
+                    try:
+                        psa_results = run_psa_with_progress(
+                            n_iterations=psa_iterations,
+                            n_patients=psa_patients,
+                            time_horizon=time_horizon,
+                            seed=psa_seed,
+                            discount_rate=discount_rate,
+                            progress_container=progress_container
+                        )
+                        st.session_state.psa_results = psa_results
+                        st.success(f"PSA completed: {psa_iterations} iterations with {psa_patients} patients per arm")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"PSA failed: {str(e)}")
+                        import traceback
+                        st.code(traceback.format_exc())
+
+            # Display PSA results if available
+            if "psa_results" in st.session_state:
+                st.divider()
+                display_psa_results(st.session_state.psa_results, currency)
+            else:
+                st.info("Configure PSA parameters above and click **Run PSA** to perform probabilistic sensitivity analysis.")
+
+                # Show what PSA will analyze
+                with st.expander("Parameters included in PSA"):
+                    st.markdown("""
+                    **Treatment Effects:**
+                    - IXA-001 SBP reduction (mean, SD)
+                    - Spironolactone SBP reduction (mean, SD)
+
+                    **Clinical Parameters:**
+                    - Risk ratios per 10mmHg SBP (MI, Stroke, HF)
+                    - Case fatality rates (MI, Stroke, HF)
+
+                    **Costs:**
+                    - Drug costs (IXA-001, Spironolactone)
+                    - Acute event costs (MI, Stroke, HF)
+                    - Annual management costs (Post-MI, Post-Stroke, HF, ESRD)
+
+                    **Utilities:**
+                    - Post-event utilities (MI, Stroke, HF, ESRD)
+                    - Chronic condition utilities
+
+                    **Correlated Parameters:**
+                    - Acute costs are correlated (ρ = 0.5-0.8)
+                    - Utilities are correlated (ρ = 0.4-0.6)
+                    - Risk ratios are correlated (ρ = 0.4-0.5)
+
+                    Sampling uses **Cholesky decomposition** to preserve correlations.
+                    """)
+
+        else:
+            # NORMAL MODE - Show tabbed interface
+            # Key metrics
+            display_key_metrics(cea, currency)
+
+            st.divider()
+
+            # Tabs for different views (PSA is now a button, not a tab)
+            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
+                "Outcomes", "Costs", "Charts", "Subgroups", "Risk Stratification", "Trajectories", "Calculations", "Export"
+            ])
+
+            # PSA button in sidebar
+            st.sidebar.markdown("---")
+            st.sidebar.markdown("### Sensitivity Analysis")
+            if st.sidebar.button("Open PSA Analysis", type="primary", use_container_width=True):
+                st.session_state.psa_mode = True
+                st.rerun()
+
+            with tab1:
+                display_outcomes_table(cea, currency)
+                st.divider()
+                display_medication_adherence(cea)
+
+            with tab2:
+                display_detailed_costs(cea, currency)
+                st.divider()
+                display_wtp_analysis(cea, currency)
+
+            with tab3:
+                display_event_charts(cea)
+                st.divider()
+                display_ce_plane(cea, currency)
+                st.divider()
+                display_patient_scatter(cea, currency)
+
+            with tab4:
+                display_subgroup_analysis(subgroup_data, currency)
+
+            with tab5:
+                display_risk_stratification(profiles)
+
+            with tab6:
+                display_patient_trajectories(st.session_state.patients_ixa, cea.intervention)
+
+            with tab7:
+                # Simulation Calculations tab
+                st.markdown("### Simulation Calculations")
+                calc_arm = st.radio("Select Treatment Arm", ["IXA-001", "Spironolactone"], horizontal=True)
+
+                # Get simulation logs from session state
+                sim_log_ixa = st.session_state.get('sim_log_ixa', {})
+                sim_log_spi = st.session_state.get('sim_log_spi', {})
+
+                if calc_arm == "IXA-001":
+                    display_simulation_calculations(cea.intervention, currency, sim_log_ixa)
+                else:
+                    display_simulation_calculations(cea.comparator, currency, sim_log_spi)
+
+            with tab8:
+                st.markdown("### Export Results")
+                st.markdown("Download comprehensive Excel report with all analysis results and parameters used.")
+
+                excel_buffer = generate_excel_report(cea, pp, subgroup_data, currency, custom_costs, treatment_params, clinical_params)
+                st.download_button(
+                    label="Download Excel Report",
+                    data=excel_buffer,
+                    file_name="CEA_Microsimulation_Report.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
+
+                st.markdown("""
+                **Report Contents:**
+                - Executive Summary with key results
+                - Clinical Events comparison with charts
+                - Cost Analysis (direct & indirect)
+                - Subgroup Analysis by risk categories
+                - Willingness-to-Pay Analysis
+                - All Simulation Parameters used
+                """)
+
+            # Summary box
+            st.divider()
+            st.markdown("### Summary")
+
+            col1, col2, col3 = st.columns(3)
+
+            with col1:
+                st.markdown(f"""
+                **Simulation Parameters:**
+                - Cohort size: {n_patients:,} patients per arm
+                - Time horizon: {time_horizon} years
+                - Perspective: {perspective}
+                - Discount rate: {discount_rate*100:.1f}% per annum
+                """)
+
+            with col2:
+                st.markdown(f"""
+                **Population Characteristics:**
+                - Mean age: {pp.age_mean:.0f} years (SD {pp.age_sd:.0f})
+                - Male: {pp.prop_male*100:.0f}%
+                - Mean SBP: {pp.sbp_mean:.0f} mmHg
+                - Mean eGFR: {pp.egfr_mean:.0f} mL/min
+                - Diabetes: {pp.diabetes_prev*100:.0f}%
+                """)
+
+            with col3:
+                events_avoided = cea.comparator.stroke_events - cea.intervention.stroke_events
+                mi_avoided = cea.comparator.mi_events - cea.intervention.mi_events
+
+                st.markdown(f"""
+                **Key Findings:**
+                - Strokes avoided: {events_avoided:,}
+                - MIs avoided: {mi_avoided:,}
+                - Additional QALYs: {cea.incremental_qalys:.2f}
+                - Additional cost: {currency}{cea.incremental_costs:,.0f}
+                """)
 
     else:
         st.info("Configure parameters and click **Run Simulation** to start the analysis.")
