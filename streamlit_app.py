@@ -1366,12 +1366,20 @@ def display_patient_scatter(cea: CEAResults, currency: str):
     spi_costs = [p.get('cumulative_costs', 0) for p in spi_data]
     spi_qalys = [p.get('cumulative_qalys', 0) for p in spi_data]
 
-    # Plot options
+    # Plot options - use session state to preserve selection across reruns
+    if 'scatter_plot_type' not in st.session_state:
+        st.session_state.scatter_plot_type = "Both Arms (Absolute)"
+
     plot_type = st.radio(
         "View",
         ["Both Arms (Absolute)", "Incremental (Paired)", "Distribution"],
-        horizontal=True
+        horizontal=True,
+        key="scatter_plot_radio",
+        index=["Both Arms (Absolute)", "Incremental (Paired)", "Distribution"].index(
+            st.session_state.get('scatter_plot_type', "Both Arms (Absolute)")
+        )
     )
+    st.session_state.scatter_plot_type = plot_type
 
     if plot_type == "Both Arms (Absolute)":
         fig, ax = plt.subplots(figsize=(10, 7))
@@ -2424,16 +2432,104 @@ def main():
         treatment_params = st.session_state.get('treatment_params')
         clinical_params = st.session_state.get('clinical_params')
 
-        # Check if we're in PSA mode
-        if st.session_state.get('psa_mode', False):
-            # PSA MODE - Show PSA interface as main content
-            st.markdown("## Probabilistic Sensitivity Analysis (PSA)")
+        # Key metrics
+        display_key_metrics(cea, currency)
 
-            # Back button to return to main results
-            if st.button("← Back to Main Results", type="secondary"):
-                st.session_state.psa_mode = False
-                st.rerun()
+        st.divider()
 
+        # Navigation options
+        nav_options = [
+            "Outcomes", "Costs", "Charts", "Subgroups",
+            "Risk Stratification", "Trajectories", "Calculations", "Export", "PSA"
+        ]
+
+        # Initialize session state for navigation
+        if 'current_section' not in st.session_state:
+            st.session_state.current_section = "Outcomes"
+
+        # Horizontal radio navigation (tab-like appearance)
+        selected_section = st.radio(
+            "Navigation",
+            nav_options,
+            index=nav_options.index(st.session_state.current_section),
+            horizontal=True,
+            key="section_nav",
+            label_visibility="collapsed"
+        )
+        st.session_state.current_section = selected_section
+
+        st.divider()
+
+        # Display selected section
+        if selected_section == "Outcomes":
+            display_outcomes_table(cea, currency)
+            st.divider()
+            display_medication_adherence(cea)
+
+        elif selected_section == "Costs":
+            display_detailed_costs(cea, currency)
+            st.divider()
+            display_wtp_analysis(cea, currency)
+
+        elif selected_section == "Charts":
+            display_event_charts(cea)
+            st.divider()
+            display_ce_plane(cea, currency)
+            st.divider()
+            display_patient_scatter(cea, currency)
+
+        elif selected_section == "Subgroups":
+            display_subgroup_analysis(subgroup_data, currency)
+
+        elif selected_section == "Risk Stratification":
+            display_risk_stratification(profiles)
+
+        elif selected_section == "Trajectories":
+            display_patient_trajectories(st.session_state.patients_ixa, cea.intervention)
+
+        elif selected_section == "Calculations":
+            st.markdown("### Simulation Calculations")
+            calc_arm = st.radio(
+                "Select Treatment Arm",
+                ["IXA-001", "Spironolactone"],
+                horizontal=True,
+                key="calc_arm_radio"
+            )
+
+            # Get simulation logs from session state
+            sim_log_ixa = st.session_state.get('sim_log_ixa', {})
+            sim_log_spi = st.session_state.get('sim_log_spi', {})
+
+            if calc_arm == "IXA-001":
+                display_simulation_calculations(cea.intervention, currency, sim_log_ixa)
+            else:
+                display_simulation_calculations(cea.comparator, currency, sim_log_spi)
+
+        elif selected_section == "Export":
+            st.markdown("### Export Results")
+            st.markdown("Download comprehensive Excel report with all analysis results and parameters used.")
+
+            excel_buffer = generate_excel_report(cea, pp, subgroup_data, currency, custom_costs, treatment_params, clinical_params)
+            st.download_button(
+                label="Download Excel Report",
+                data=excel_buffer,
+                file_name="CEA_Microsimulation_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                type="primary"
+            )
+
+            st.markdown("""
+            **Report Contents:**
+            - Executive Summary with key results
+            - Clinical Events comparison with charts
+            - Cost Analysis (direct & indirect)
+            - Subgroup Analysis by risk categories
+            - Willingness-to-Pay Analysis
+            - All Simulation Parameters used
+            """)
+
+        elif selected_section == "PSA":
+            st.markdown("### Probabilistic Sensitivity Analysis (PSA)")
             st.markdown("""
             PSA quantifies **parameter uncertainty** by sampling model parameters from probability distributions
             and running multiple simulations. This generates distributions of outcomes rather than point estimates.
@@ -2488,7 +2584,7 @@ def main():
             st.divider()
 
             # Run PSA button
-            if st.button("Run PSA", type="primary", use_container_width=True, key="run_psa_main"):
+            if st.button("Run PSA", type="primary", use_container_width=True, key="run_psa_btn"):
                 progress_container = st.container()
 
                 with st.spinner("Running Probabilistic Sensitivity Analysis..."):
@@ -2544,124 +2640,42 @@ def main():
                     Sampling uses **Cholesky decomposition** to preserve correlations.
                     """)
 
-        else:
-            # NORMAL MODE - Show tabbed interface
-            # Key metrics
-            display_key_metrics(cea, currency)
+        # Summary box
+        st.divider()
+        st.markdown("### Summary")
 
-            st.divider()
+        col1, col2, col3 = st.columns(3)
 
-            # Tabs for different views (PSA is now a button, not a tab)
-            tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs([
-                "Outcomes", "Costs", "Charts", "Subgroups", "Risk Stratification", "Trajectories", "Calculations", "Export"
-            ])
+        with col1:
+            st.markdown(f"""
+            **Simulation Parameters:**
+            - Cohort size: {n_patients:,} patients per arm
+            - Time horizon: {time_horizon} years
+            - Perspective: {perspective}
+            - Discount rate: {discount_rate*100:.1f}% per annum
+            """)
 
-            # PSA button in sidebar
-            st.sidebar.markdown("---")
-            st.sidebar.markdown("### Sensitivity Analysis")
-            if st.sidebar.button("Open PSA Analysis", type="primary", use_container_width=True):
-                st.session_state.psa_mode = True
-                st.rerun()
+        with col2:
+            st.markdown(f"""
+            **Population Characteristics:**
+            - Mean age: {pp.age_mean:.0f} years (SD {pp.age_sd:.0f})
+            - Male: {pp.prop_male*100:.0f}%
+            - Mean SBP: {pp.sbp_mean:.0f} mmHg
+            - Mean eGFR: {pp.egfr_mean:.0f} mL/min
+            - Diabetes: {pp.diabetes_prev*100:.0f}%
+            """)
 
-            with tab1:
-                display_outcomes_table(cea, currency)
-                st.divider()
-                display_medication_adherence(cea)
+        with col3:
+            events_avoided = cea.comparator.stroke_events - cea.intervention.stroke_events
+            mi_avoided = cea.comparator.mi_events - cea.intervention.mi_events
 
-            with tab2:
-                display_detailed_costs(cea, currency)
-                st.divider()
-                display_wtp_analysis(cea, currency)
-
-            with tab3:
-                display_event_charts(cea)
-                st.divider()
-                display_ce_plane(cea, currency)
-                st.divider()
-                display_patient_scatter(cea, currency)
-
-            with tab4:
-                display_subgroup_analysis(subgroup_data, currency)
-
-            with tab5:
-                display_risk_stratification(profiles)
-
-            with tab6:
-                display_patient_trajectories(st.session_state.patients_ixa, cea.intervention)
-
-            with tab7:
-                # Simulation Calculations tab
-                st.markdown("### Simulation Calculations")
-                calc_arm = st.radio("Select Treatment Arm", ["IXA-001", "Spironolactone"], horizontal=True)
-
-                # Get simulation logs from session state
-                sim_log_ixa = st.session_state.get('sim_log_ixa', {})
-                sim_log_spi = st.session_state.get('sim_log_spi', {})
-
-                if calc_arm == "IXA-001":
-                    display_simulation_calculations(cea.intervention, currency, sim_log_ixa)
-                else:
-                    display_simulation_calculations(cea.comparator, currency, sim_log_spi)
-
-            with tab8:
-                st.markdown("### Export Results")
-                st.markdown("Download comprehensive Excel report with all analysis results and parameters used.")
-
-                excel_buffer = generate_excel_report(cea, pp, subgroup_data, currency, custom_costs, treatment_params, clinical_params)
-                st.download_button(
-                    label="Download Excel Report",
-                    data=excel_buffer,
-                    file_name="CEA_Microsimulation_Report.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    type="primary"
-                )
-
-                st.markdown("""
-                **Report Contents:**
-                - Executive Summary with key results
-                - Clinical Events comparison with charts
-                - Cost Analysis (direct & indirect)
-                - Subgroup Analysis by risk categories
-                - Willingness-to-Pay Analysis
-                - All Simulation Parameters used
-                """)
-
-            # Summary box
-            st.divider()
-            st.markdown("### Summary")
-
-            col1, col2, col3 = st.columns(3)
-
-            with col1:
-                st.markdown(f"""
-                **Simulation Parameters:**
-                - Cohort size: {n_patients:,} patients per arm
-                - Time horizon: {time_horizon} years
-                - Perspective: {perspective}
-                - Discount rate: {discount_rate*100:.1f}% per annum
-                """)
-
-            with col2:
-                st.markdown(f"""
-                **Population Characteristics:**
-                - Mean age: {pp.age_mean:.0f} years (SD {pp.age_sd:.0f})
-                - Male: {pp.prop_male*100:.0f}%
-                - Mean SBP: {pp.sbp_mean:.0f} mmHg
-                - Mean eGFR: {pp.egfr_mean:.0f} mL/min
-                - Diabetes: {pp.diabetes_prev*100:.0f}%
-                """)
-
-            with col3:
-                events_avoided = cea.comparator.stroke_events - cea.intervention.stroke_events
-                mi_avoided = cea.comparator.mi_events - cea.intervention.mi_events
-
-                st.markdown(f"""
-                **Key Findings:**
-                - Strokes avoided: {events_avoided:,}
-                - MIs avoided: {mi_avoided:,}
-                - Additional QALYs: {cea.incremental_qalys:.2f}
-                - Additional cost: {currency}{cea.incremental_costs:,.0f}
-                """)
+            st.markdown(f"""
+            **Key Findings:**
+            - Strokes avoided: {events_avoided:,}
+            - MIs avoided: {mi_avoided:,}
+            - Additional QALYs: {cea.incremental_qalys:.2f}
+            - Additional cost: {currency}{cea.incremental_costs:,.0f}
+            """)
 
     else:
         st.info("Configure parameters and click **Run Simulation** to start the analysis.")
