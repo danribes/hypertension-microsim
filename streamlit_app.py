@@ -187,220 +187,490 @@ def analyze_subgroups(patients: List[Patient], results: SimulationResults, profi
 
 def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
                           subgroup_data: Dict, currency: str) -> BytesIO:
-    """Generate comprehensive Excel report."""
-    import tempfile
-    import os
+    """Generate comprehensive Excel report with charts and formatting."""
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
-    from openpyxl.utils.dataframe import dataframe_to_rows
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, NamedStyle
+    from openpyxl.chart import BarChart, PieChart, Reference, LineChart
+    from openpyxl.chart.label import DataLabelList
+    from openpyxl.utils import get_column_letter
 
     wb = Workbook()
 
-    # Style definitions
-    header_font = Font(bold=True, color="FFFFFF")
+    # ===== Style definitions =====
+    header_font = Font(bold=True, color="FFFFFF", size=11)
     header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
+    subheader_fill = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
+    alt_row_fill = PatternFill(start_color="D6DCE4", end_color="D6DCE4", fill_type="solid")
+    highlight_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
+    warning_fill = PatternFill(start_color="FFEB9C", end_color="FFEB9C", fill_type="solid")
+    title_font = Font(bold=True, size=18, color="1F4E79")
+    subtitle_font = Font(bold=True, size=14, color="2E75B6")
     border = Border(
-        left=Side(style='thin'), right=Side(style='thin'),
-        top=Side(style='thin'), bottom=Side(style='thin')
+        left=Side(style='thin', color='B4B4B4'),
+        right=Side(style='thin', color='B4B4B4'),
+        top=Side(style='thin', color='B4B4B4'),
+        bottom=Side(style='thin', color='B4B4B4')
     )
+    center_align = Alignment(horizontal='center', vertical='center')
+    currency_sym = currency
+
+    def apply_table_style(ws, start_row, end_row, num_cols):
+        """Apply alternating row colors and borders to a table."""
+        for row_idx in range(start_row, end_row + 1):
+            for col_idx in range(1, num_cols + 1):
+                cell = ws.cell(row=row_idx, column=col_idx)
+                cell.border = border
+                if row_idx == start_row:
+                    cell.font = header_font
+                    cell.fill = header_fill
+                    cell.alignment = center_align
+                elif (row_idx - start_row) % 2 == 0:
+                    cell.fill = alt_row_fill
 
     # ========== Sheet 1: Executive Summary ==========
     ws = wb.active
     ws.title = "Executive Summary"
 
-    summary_data = [
-        ["Cost-Effectiveness Analysis: IXA-001 vs Spironolactone"],
-        [""],
-        ["Key Results"],
-        ["Metric", "Value"],
-        ["Incremental Costs", f"{currency}{cea.incremental_costs:,.0f}"],
+    # Title
+    ws.merge_cells('A1:D1')
+    ws['A1'] = "Cost-Effectiveness Analysis Report"
+    ws['A1'].font = title_font
+    ws['A1'].alignment = Alignment(horizontal='center')
+
+    ws.merge_cells('A2:D2')
+    ws['A2'] = "IXA-001 vs Spironolactone in Resistant Hypertension"
+    ws['A2'].font = subtitle_font
+    ws['A2'].alignment = Alignment(horizontal='center')
+
+    # Key Results Box
+    ws['A4'] = "KEY RESULTS"
+    ws['A4'].font = Font(bold=True, size=12, color="FFFFFF")
+    ws['A4'].fill = header_fill
+    ws.merge_cells('A4:B4')
+
+    results_data = [
+        ["Incremental Costs", f"{currency_sym}{cea.incremental_costs:,.0f}"],
         ["Incremental QALYs", f"{cea.incremental_qalys:.3f}"],
-        ["ICER", f"{currency}{cea.icer:,.0f}/QALY" if cea.icer else "Dominant"],
-        [""],
-        ["Population Characteristics"],
-        ["Mean Age", f"{pop_params.age_mean:.0f} years"],
+        ["ICER", f"{currency_sym}{cea.icer:,.0f}/QALY" if cea.icer else "Dominant"],
+        ["Interpretation", "Cost-Effective" if (cea.icer and cea.icer < 100000) or cea.incremental_qalys > 0 else "Review Required"],
+    ]
+
+    for i, (label, value) in enumerate(results_data, start=5):
+        ws.cell(row=i, column=1, value=label).font = Font(bold=True)
+        ws.cell(row=i, column=2, value=value)
+        if "Dominant" in str(value) or "Cost-Effective" in str(value):
+            ws.cell(row=i, column=2).fill = highlight_fill
+
+    # Population Summary
+    ws['A10'] = "POPULATION CHARACTERISTICS"
+    ws['A10'].font = Font(bold=True, size=12, color="FFFFFF")
+    ws['A10'].fill = header_fill
+    ws.merge_cells('A10:B10')
+
+    pop_data = [
+        ["Cohort Size", f"{pop_params.n_patients:,} per arm"],
+        ["Mean Age", f"{pop_params.age_mean:.0f} years (SD {pop_params.age_sd:.0f})"],
         ["% Male", f"{pop_params.prop_male*100:.0f}%"],
         ["Mean SBP", f"{pop_params.sbp_mean:.0f} mmHg"],
         ["Mean eGFR", f"{pop_params.egfr_mean:.0f} mL/min/1.73m²"],
-        ["Diabetes Prevalence", f"{pop_params.diabetes_prev*100:.0f}%"],
-        ["Prior MI Prevalence", f"{pop_params.prior_mi_prev*100:.0f}%"],
-        ["Heart Failure Prevalence", f"{pop_params.heart_failure_prev*100:.0f}%"],
+        ["Diabetes", f"{pop_params.diabetes_prev*100:.0f}%"],
+        ["Prior MI", f"{pop_params.prior_mi_prev*100:.0f}%"],
+        ["Heart Failure", f"{pop_params.heart_failure_prev*100:.0f}%"],
     ]
 
-    for row in summary_data:
-        ws.append(row)
+    for i, (label, value) in enumerate(pop_data, start=11):
+        ws.cell(row=i, column=1, value=label)
+        ws.cell(row=i, column=2, value=value)
+        if i % 2 == 0:
+            ws.cell(row=i, column=1).fill = alt_row_fill
+            ws.cell(row=i, column=2).fill = alt_row_fill
 
-    ws['A1'].font = Font(bold=True, size=16)
-    ws.column_dimensions['A'].width = 30
+    ws.column_dimensions['A'].width = 25
     ws.column_dimensions['B'].width = 25
 
-    # ========== Sheet 2: Detailed Outcomes ==========
-    ws2 = wb.create_sheet("Detailed Outcomes")
+    # ========== Sheet 2: Clinical Events with Chart ==========
+    ws2 = wb.create_sheet("Clinical Events")
 
-    outcomes = [
-        ["Outcome", "IXA-001", "Spironolactone", "Difference"],
-        ["Mean Total Costs", f"{currency}{cea.intervention.mean_costs:,.0f}",
-         f"{currency}{cea.comparator.mean_costs:,.0f}", f"{currency}{cea.incremental_costs:,.0f}"],
-        ["Mean Direct Costs", f"{currency}{cea.intervention.mean_costs - cea.intervention.total_indirect_costs/cea.intervention.n_patients:,.0f}",
-         f"{currency}{cea.comparator.mean_costs - cea.comparator.total_indirect_costs/cea.comparator.n_patients:,.0f}", "-"],
-        ["Mean Indirect Costs", f"{currency}{cea.intervention.total_indirect_costs/cea.intervention.n_patients:,.0f}",
-         f"{currency}{cea.comparator.total_indirect_costs/cea.comparator.n_patients:,.0f}", "-"],
-        ["Mean QALYs", f"{cea.intervention.mean_qalys:.3f}", f"{cea.comparator.mean_qalys:.3f}", f"{cea.incremental_qalys:.3f}"],
-        ["Mean Life Years", f"{cea.intervention.mean_life_years:.2f}", f"{cea.comparator.mean_life_years:.2f}",
-         f"{cea.intervention.mean_life_years - cea.comparator.mean_life_years:.2f}"],
-        [""],
-        ["Clinical Events (per 1000)"],
-        ["MI Events", cea.intervention.mi_events, cea.comparator.mi_events,
-         cea.intervention.mi_events - cea.comparator.mi_events],
-        ["Stroke Events", cea.intervention.stroke_events, cea.comparator.stroke_events,
-         cea.intervention.stroke_events - cea.comparator.stroke_events],
-        ["  - Ischemic", cea.intervention.ischemic_stroke_events, cea.comparator.ischemic_stroke_events, "-"],
-        ["  - Hemorrhagic", cea.intervention.hemorrhagic_stroke_events, cea.comparator.hemorrhagic_stroke_events, "-"],
-        ["TIA Events", cea.intervention.tia_events, cea.comparator.tia_events, "-"],
-        ["Heart Failure", cea.intervention.hf_events, cea.comparator.hf_events, "-"],
-        ["CV Deaths", cea.intervention.cv_deaths, cea.comparator.cv_deaths, "-"],
-        ["Non-CV Deaths", cea.intervention.non_cv_deaths, cea.comparator.non_cv_deaths, "-"],
-        [""],
-        ["Renal Events"],
-        ["CKD Stage 4 Progression", cea.intervention.ckd_4_events, cea.comparator.ckd_4_events, "-"],
-        ["ESRD Events", cea.intervention.esrd_events, cea.comparator.esrd_events, "-"],
-        [""],
-        ["Cognitive Events"],
-        ["Dementia Cases", cea.intervention.dementia_cases, cea.comparator.dementia_cases, "-"],
-        [""],
-        ["Medication & Adherence"],
-        ["SGLT2 Users", cea.intervention.sglt2_users, cea.comparator.sglt2_users, "-"],
-        [""],
-        ["BP Control"],
-        ["Time Controlled (patient-years)", f"{cea.intervention.time_controlled:.1f}",
-         f"{cea.comparator.time_controlled:.1f}", "-"],
-        ["Time Uncontrolled (patient-years)", f"{cea.intervention.time_uncontrolled:.1f}",
-         f"{cea.comparator.time_uncontrolled:.1f}", "-"],
+    ws2['A1'] = "Clinical Events Comparison"
+    ws2['A1'].font = title_font
+
+    # Events table for chart
+    events_header = ["Event", "IXA-001", "Spironolactone"]
+    events_data = [
+        ["MI", cea.intervention.mi_events, cea.comparator.mi_events],
+        ["Stroke", cea.intervention.stroke_events, cea.comparator.stroke_events],
+        ["TIA", cea.intervention.tia_events, cea.comparator.tia_events],
+        ["Heart Failure", cea.intervention.hf_events, cea.comparator.hf_events],
+        ["CV Death", cea.intervention.cv_deaths, cea.comparator.cv_deaths],
+        ["CKD Stage 4", cea.intervention.ckd_4_events, cea.comparator.ckd_4_events],
+        ["ESRD", cea.intervention.esrd_events, cea.comparator.esrd_events],
     ]
 
-    for row in outcomes:
+    ws2.append([])  # Row 2
+    ws2.append(events_header)  # Row 3
+    for row in events_data:
         ws2.append(row)
 
-    for cell in ws2[1]:
-        cell.font = header_font
-        cell.fill = header_fill
+    apply_table_style(ws2, 3, 3 + len(events_data), 3)
 
-    for col in ['A', 'B', 'C', 'D']:
-        ws2.column_dimensions[col].width = 25
+    # Create bar chart for events
+    chart = BarChart()
+    chart.type = "col"
+    chart.grouping = "clustered"
+    chart.title = "Clinical Events per 1000 Patients"
+    chart.y_axis.title = "Number of Events"
+    chart.x_axis.title = "Event Type"
+    chart.style = 10
 
-    # ========== Sheet 3: Subgroup Analysis ==========
-    ws3 = wb.create_sheet("Subgroup Analysis")
+    data = Reference(ws2, min_col=2, min_row=3, max_col=3, max_row=3 + len(events_data))
+    cats = Reference(ws2, min_col=1, min_row=4, max_row=3 + len(events_data))
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    chart.shape = 4
+    chart.width = 15
+    chart.height = 10
 
-    ws3.append(["Subgroup Analysis by Risk Category"])
-    ws3.append([""])
+    ws2.add_chart(chart, "E3")
 
-    # Framingham subgroups
-    ws3.append(["By Framingham CVD Risk"])
-    ws3.append(["Category", "N Patients", "Mean Costs", "Mean QALYs"])
-    for cat, patients in subgroup_data['framingham'].items():
+    # Events avoided summary
+    ws2['A14'] = "EVENTS AVOIDED WITH IXA-001"
+    ws2['A14'].font = subtitle_font
+
+    avoided_data = [
+        ["Event", "Events Avoided"],
+        ["Strokes", cea.comparator.stroke_events - cea.intervention.stroke_events],
+        ["MIs", cea.comparator.mi_events - cea.intervention.mi_events],
+        ["CV Deaths", cea.comparator.cv_deaths - cea.intervention.cv_deaths],
+        ["ESRD Cases", cea.comparator.esrd_events - cea.intervention.esrd_events],
+    ]
+
+    for i, row in enumerate(avoided_data, start=15):
+        for j, val in enumerate(row, start=1):
+            cell = ws2.cell(row=i, column=j, value=val)
+            if i == 15:
+                cell.font = header_font
+                cell.fill = subheader_fill
+            elif j == 2 and isinstance(val, (int, float)) and val > 0:
+                cell.fill = highlight_fill
+
+    ws2.column_dimensions['A'].width = 20
+    ws2.column_dimensions['B'].width = 15
+    ws2.column_dimensions['C'].width = 15
+
+    # ========== Sheet 3: Cost Analysis with Chart ==========
+    ws3 = wb.create_sheet("Cost Analysis")
+
+    ws3['A1'] = "Cost Breakdown Analysis"
+    ws3['A1'].font = title_font
+
+    # Cost data for chart
+    direct_ixa = cea.intervention.mean_costs - (cea.intervention.total_indirect_costs / cea.intervention.n_patients)
+    indirect_ixa = cea.intervention.total_indirect_costs / cea.intervention.n_patients
+    direct_spi = cea.comparator.mean_costs - (cea.comparator.total_indirect_costs / cea.comparator.n_patients)
+    indirect_spi = cea.comparator.total_indirect_costs / cea.comparator.n_patients
+
+    cost_header = ["Cost Category", "IXA-001", "Spironolactone"]
+    cost_data = [
+        ["Direct Costs", direct_ixa, direct_spi],
+        ["Indirect Costs", indirect_ixa, indirect_spi],
+        ["Total Costs", cea.intervention.mean_costs, cea.comparator.mean_costs],
+    ]
+
+    ws3.append([])
+    ws3.append(cost_header)
+    for row in cost_data:
+        ws3.append([row[0], row[1], row[2]])
+
+    apply_table_style(ws3, 3, 3 + len(cost_data), 3)
+
+    # Format as currency
+    for row in range(4, 4 + len(cost_data)):
+        for col in [2, 3]:
+            cell = ws3.cell(row=row, column=col)
+            if isinstance(cell.value, (int, float)):
+                cell.value = f"{currency_sym}{cell.value:,.0f}"
+
+    # Create cost comparison bar chart
+    chart2 = BarChart()
+    chart2.type = "col"
+    chart2.grouping = "clustered"
+    chart2.title = "Mean Costs per Patient"
+    chart2.y_axis.title = f"Cost ({currency_sym})"
+    chart2.style = 12
+
+    # Need numeric data for chart - create separate data area
+    ws3['E3'] = "Chart Data"
+    ws3['E4'] = "Direct"
+    ws3['E5'] = "Indirect"
+    ws3['F3'] = "IXA-001"
+    ws3['F4'] = direct_ixa
+    ws3['F5'] = indirect_ixa
+    ws3['G3'] = "Spironolactone"
+    ws3['G4'] = direct_spi
+    ws3['G5'] = indirect_spi
+
+    data2 = Reference(ws3, min_col=6, min_row=3, max_col=7, max_row=5)
+    cats2 = Reference(ws3, min_col=5, min_row=4, max_row=5)
+    chart2.add_data(data2, titles_from_data=True)
+    chart2.set_categories(cats2)
+    chart2.width = 12
+    chart2.height = 8
+
+    ws3.add_chart(chart2, "A9")
+
+    # Incremental cost summary
+    ws3['A20'] = "INCREMENTAL ANALYSIS"
+    ws3['A20'].font = subtitle_font
+
+    inc_data = [
+        ["Metric", "Value"],
+        ["Incremental Direct Costs", f"{currency_sym}{direct_ixa - direct_spi:,.0f}"],
+        ["Incremental Indirect Costs", f"{currency_sym}{indirect_ixa - indirect_spi:,.0f}"],
+        ["Total Incremental Costs", f"{currency_sym}{cea.incremental_costs:,.0f}"],
+        ["Incremental QALYs", f"{cea.incremental_qalys:.3f}"],
+        ["ICER", f"{currency_sym}{cea.icer:,.0f}/QALY" if cea.icer else "Dominant"],
+    ]
+
+    for i, row in enumerate(inc_data, start=21):
+        for j, val in enumerate(row, start=1):
+            cell = ws3.cell(row=i, column=j, value=val)
+            if i == 21:
+                cell.font = header_font
+                cell.fill = header_fill
+
+    ws3.column_dimensions['A'].width = 25
+    ws3.column_dimensions['B'].width = 20
+    ws3.column_dimensions['C'].width = 20
+
+    # ========== Sheet 4: Subgroup Analysis with Chart ==========
+    ws4 = wb.create_sheet("Subgroup Analysis")
+
+    ws4['A1'] = "Subgroup Analysis"
+    ws4['A1'].font = title_font
+
+    # Age group data for chart
+    ws4['A3'] = "By Age Group"
+    ws4['A3'].font = subtitle_font
+
+    ws4.append(["Age Group", "N Patients", "Mean Costs", "Mean QALYs"])
+    age_start_row = 5
+    age_row = age_start_row
+
+    for cat in ['<60', '60-70', '70-80', '80+']:
+        patients = subgroup_data['age'].get(cat, [])
         n = len(patients)
         if n > 0:
-            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients]) if patients else 0
-            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients]) if patients else 0
-            ws3.append([cat, n, f"{currency}{mean_costs:,.0f}", f"{mean_qalys:.3f}"])
+            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
+            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
+            ws4.append([cat, n, mean_costs, mean_qalys])
+            age_row += 1
 
-    ws3.append([""])
-    ws3.append(["By KDIGO Risk Level"])
-    ws3.append(["Category", "N Patients", "Mean Costs", "Mean QALYs"])
-    for cat, patients in subgroup_data['kdigo'].items():
+    apply_table_style(ws4, age_start_row - 1, age_row - 1, 4)
+
+    # Create age group chart
+    if age_row > age_start_row:
+        chart3 = BarChart()
+        chart3.type = "col"
+        chart3.title = "Outcomes by Age Group"
+        chart3.y_axis.title = "Mean QALYs"
+        chart3.style = 11
+
+        data3 = Reference(ws4, min_col=4, min_row=age_start_row - 1, max_row=age_row - 1)
+        cats3 = Reference(ws4, min_col=1, min_row=age_start_row, max_row=age_row - 1)
+        chart3.add_data(data3, titles_from_data=True)
+        chart3.set_categories(cats3)
+        chart3.width = 10
+        chart3.height = 7
+
+        ws4.add_chart(chart3, "F3")
+
+    # Framingham Risk
+    current_row = age_row + 2
+    ws4.cell(row=current_row, column=1, value="By Framingham CVD Risk").font = subtitle_font
+    current_row += 1
+    ws4.cell(row=current_row, column=1, value="Category")
+    ws4.cell(row=current_row, column=2, value="N Patients")
+    ws4.cell(row=current_row, column=3, value="Mean Costs")
+    ws4.cell(row=current_row, column=4, value="Mean QALYs")
+    fram_header_row = current_row
+
+    for cat in ['Low', 'Borderline', 'Intermediate', 'High']:
+        patients = subgroup_data['framingham'].get(cat, [])
         n = len(patients)
         if n > 0:
-            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients]) if patients else 0
-            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients]) if patients else 0
-            ws3.append([cat, n, f"{currency}{mean_costs:,.0f}", f"{mean_qalys:.3f}"])
+            current_row += 1
+            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
+            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
+            ws4.cell(row=current_row, column=1, value=cat)
+            ws4.cell(row=current_row, column=2, value=n)
+            ws4.cell(row=current_row, column=3, value=f"{currency_sym}{mean_costs:,.0f}")
+            ws4.cell(row=current_row, column=4, value=f"{mean_qalys:.3f}")
 
-    ws3.append([""])
-    ws3.append(["By GCUA Phenotype"])
-    ws3.append(["Phenotype", "N Patients", "Mean Costs", "Mean QALYs"])
-    for cat, patients in subgroup_data['gcua'].items():
+    apply_table_style(ws4, fram_header_row, current_row, 4)
+
+    # KDIGO Risk
+    current_row += 2
+    ws4.cell(row=current_row, column=1, value="By KDIGO Risk Level").font = subtitle_font
+    current_row += 1
+    kdigo_header_row = current_row
+    ws4.cell(row=current_row, column=1, value="Risk Level")
+    ws4.cell(row=current_row, column=2, value="N Patients")
+    ws4.cell(row=current_row, column=3, value="Mean Costs")
+    ws4.cell(row=current_row, column=4, value="Mean QALYs")
+
+    for cat in ['Low', 'Moderate', 'High', 'Very High']:
+        patients = subgroup_data['kdigo'].get(cat, [])
         n = len(patients)
         if n > 0:
-            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients]) if patients else 0
-            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients]) if patients else 0
-            ws3.append([cat, n, f"{currency}{mean_costs:,.0f}", f"{mean_qalys:.3f}"])
+            current_row += 1
+            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
+            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
+            ws4.cell(row=current_row, column=1, value=cat)
+            ws4.cell(row=current_row, column=2, value=n)
+            ws4.cell(row=current_row, column=3, value=f"{currency_sym}{mean_costs:,.0f}")
+            ws4.cell(row=current_row, column=4, value=f"{mean_qalys:.3f}")
 
-    ws3.append([""])
-    ws3.append(["By Age Group"])
-    ws3.append(["Age Group", "N Patients", "Mean Costs", "Mean QALYs"])
-    for cat, patients in subgroup_data['age'].items():
-        n = len(patients)
-        if n > 0:
-            mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients]) if patients else 0
-            mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients]) if patients else 0
-            ws3.append([cat, n, f"{currency}{mean_costs:,.0f}", f"{mean_qalys:.3f}"])
+    apply_table_style(ws4, kdigo_header_row, current_row, 4)
 
-    ws3.column_dimensions['A'].width = 20
-    ws3.column_dimensions['B'].width = 15
-    ws3.column_dimensions['C'].width = 15
-    ws3.column_dimensions['D'].width = 15
+    ws4.column_dimensions['A'].width = 20
+    ws4.column_dimensions['B'].width = 15
+    ws4.column_dimensions['C'].width = 15
+    ws4.column_dimensions['D'].width = 15
 
-    # ========== Sheet 4: WTP Analysis ==========
-    ws4 = wb.create_sheet("WTP Analysis")
+    # ========== Sheet 5: WTP Analysis with Chart ==========
+    ws5 = wb.create_sheet("WTP Analysis")
 
-    ws4.append(["Willingness-to-Pay Analysis"])
-    ws4.append([""])
-    ws4.append(["WTP Threshold", "NMB IXA-001", "NMB Spironolactone", "Incremental NMB", "Cost-Effective?"])
+    ws5['A1'] = "Willingness-to-Pay Analysis"
+    ws5['A1'].font = title_font
 
-    for wtp in [0, 25000, 50000, 75000, 100000, 150000, 200000]:
+    ws5.append([])
+    wtp_header = ["WTP Threshold", "NMB IXA-001", "NMB Spironolactone", "Incremental NMB", "Cost-Effective?"]
+    ws5.append(wtp_header)
+
+    wtp_values = [0, 25000, 50000, 75000, 100000, 150000, 200000]
+    wtp_start_row = 4
+
+    for wtp in wtp_values:
         nmb_ixa = cea.intervention.mean_qalys * wtp - cea.intervention.mean_costs
         nmb_spi = cea.comparator.mean_qalys * wtp - cea.comparator.mean_costs
         inc_nmb = nmb_ixa - nmb_spi
         ce = "Yes" if inc_nmb > 0 else "No"
-        ws4.append([f"{currency}{wtp:,}/QALY", f"{currency}{nmb_ixa:,.0f}",
-                   f"{currency}{nmb_spi:,.0f}", f"{currency}{inc_nmb:,.0f}", ce])
+        ws5.append([wtp, nmb_ixa, nmb_spi, inc_nmb, ce])
 
-    for cell in ws4[3]:
-        cell.font = header_font
-        cell.fill = header_fill
+    apply_table_style(ws5, 3, 3 + len(wtp_values), 5)
+
+    # Format currency columns
+    for row in range(4, 4 + len(wtp_values)):
+        ws5.cell(row=row, column=1).value = f"{currency_sym}{ws5.cell(row=row, column=1).value:,}/QALY"
+        for col in [2, 3, 4]:
+            val = ws5.cell(row=row, column=col).value
+            if isinstance(val, (int, float)):
+                ws5.cell(row=row, column=col).value = f"{currency_sym}{val:,.0f}"
+        # Highlight cost-effective rows
+        if ws5.cell(row=row, column=5).value == "Yes":
+            for col in range(1, 6):
+                ws5.cell(row=row, column=col).fill = highlight_fill
+
+    # Create WTP line chart
+    # Need numeric data for chart
+    ws5['G3'] = "WTP"
+    ws5['H3'] = "Inc NMB"
+    for i, wtp in enumerate(wtp_values, start=4):
+        ws5.cell(row=i, column=7, value=wtp)
+        nmb_ixa = cea.intervention.mean_qalys * wtp - cea.intervention.mean_costs
+        nmb_spi = cea.comparator.mean_qalys * wtp - cea.comparator.mean_costs
+        ws5.cell(row=i, column=8, value=nmb_ixa - nmb_spi)
+
+    chart4 = LineChart()
+    chart4.title = "Incremental NMB vs WTP Threshold"
+    chart4.y_axis.title = f"Incremental NMB ({currency_sym})"
+    chart4.x_axis.title = f"WTP ({currency_sym}/QALY)"
+    chart4.style = 10
+
+    data4 = Reference(ws5, min_col=8, min_row=3, max_row=3 + len(wtp_values))
+    cats4 = Reference(ws5, min_col=7, min_row=4, max_row=3 + len(wtp_values))
+    chart4.add_data(data4, titles_from_data=True)
+    chart4.set_categories(cats4)
+    chart4.width = 12
+    chart4.height = 8
+
+    ws5.add_chart(chart4, "A14")
 
     for col in ['A', 'B', 'C', 'D', 'E']:
-        ws4.column_dimensions[col].width = 20
+        ws5.column_dimensions[col].width = 18
 
-    # ========== Sheet 5: Population Parameters ==========
-    ws5 = wb.create_sheet("Population Parameters")
+    # ========== Sheet 6: Population Parameters ==========
+    ws6 = wb.create_sheet("Parameters")
 
-    params_data = [
-        ["Population Configuration"],
-        [""],
-        ["Demographics"],
-        ["Parameter", "Value"],
-        ["Mean Age (years)", pop_params.age_mean],
-        ["Age SD", pop_params.age_sd],
+    ws6['A1'] = "Simulation Parameters"
+    ws6['A1'].font = title_font
+
+    ws6['A3'] = "DEMOGRAPHICS"
+    ws6['A3'].font = Font(bold=True, color="FFFFFF")
+    ws6['A3'].fill = header_fill
+    ws6.merge_cells('A3:B3')
+
+    demo_data = [
+        ["Mean Age (years)", f"{pop_params.age_mean:.0f} (SD {pop_params.age_sd:.0f})"],
         ["% Male", f"{pop_params.prop_male*100:.0f}%"],
-        ["Mean BMI", pop_params.bmi_mean],
-        [""],
-        ["Clinical Parameters"],
-        ["Mean SBP (mmHg)", pop_params.sbp_mean],
-        ["SBP SD", pop_params.sbp_sd],
-        ["Mean eGFR (mL/min/1.73m²)", pop_params.egfr_mean],
-        ["eGFR SD", pop_params.egfr_sd],
-        ["Mean UACR (mg/g)", pop_params.uacr_mean],
-        ["Mean Total Cholesterol", pop_params.total_chol_mean],
-        ["Mean HDL Cholesterol", pop_params.hdl_chol_mean],
-        [""],
-        ["Comorbidity Prevalence"],
+        ["Mean BMI", f"{pop_params.bmi_mean:.1f}"],
+    ]
+
+    for i, (label, value) in enumerate(demo_data, start=4):
+        ws6.cell(row=i, column=1, value=label)
+        ws6.cell(row=i, column=2, value=value)
+
+    ws6['A8'] = "CLINICAL PARAMETERS"
+    ws6['A8'].font = Font(bold=True, color="FFFFFF")
+    ws6['A8'].fill = header_fill
+    ws6.merge_cells('A8:B8')
+
+    clinical_data = [
+        ["Mean SBP (mmHg)", f"{pop_params.sbp_mean:.0f} (SD {pop_params.sbp_sd:.0f})"],
+        ["Mean eGFR (mL/min/1.73m²)", f"{pop_params.egfr_mean:.0f} (SD {pop_params.egfr_sd:.0f})"],
+        ["Mean UACR (mg/g)", f"{pop_params.uacr_mean:.0f}"],
+        ["Mean Total Cholesterol", f"{pop_params.total_chol_mean:.0f}"],
+        ["Mean HDL Cholesterol", f"{pop_params.hdl_chol_mean:.0f}"],
+    ]
+
+    for i, (label, value) in enumerate(clinical_data, start=9):
+        ws6.cell(row=i, column=1, value=label)
+        ws6.cell(row=i, column=2, value=value)
+
+    ws6['A15'] = "COMORBIDITIES"
+    ws6['A15'].font = Font(bold=True, color="FFFFFF")
+    ws6['A15'].fill = header_fill
+    ws6.merge_cells('A15:B15')
+
+    comorbid_data = [
         ["Diabetes", f"{pop_params.diabetes_prev*100:.0f}%"],
         ["Current Smoker", f"{pop_params.smoker_prev*100:.0f}%"],
         ["Dyslipidemia", f"{pop_params.dyslipidemia_prev*100:.0f}%"],
         ["Prior MI", f"{pop_params.prior_mi_prev*100:.0f}%"],
         ["Prior Stroke", f"{pop_params.prior_stroke_prev*100:.0f}%"],
         ["Heart Failure", f"{pop_params.heart_failure_prev*100:.0f}%"],
-        [""],
-        ["Treatment"],
-        ["Mean Antihypertensives", pop_params.mean_antihypertensives],
+    ]
+
+    for i, (label, value) in enumerate(comorbid_data, start=16):
+        ws6.cell(row=i, column=1, value=label)
+        ws6.cell(row=i, column=2, value=value)
+
+    ws6['A23'] = "TREATMENT"
+    ws6['A23'].font = Font(bold=True, color="FFFFFF")
+    ws6['A23'].fill = header_fill
+    ws6.merge_cells('A23:B23')
+
+    treatment_data = [
+        ["Mean Antihypertensives", f"{pop_params.mean_antihypertensives}"],
         ["Adherence Probability", f"{pop_params.adherence_prob*100:.0f}%"],
     ]
 
-    for row in params_data:
-        ws5.append(row)
+    for i, (label, value) in enumerate(treatment_data, start=24):
+        ws6.cell(row=i, column=1, value=label)
+        ws6.cell(row=i, column=2, value=value)
 
-    ws5.column_dimensions['A'].width = 30
-    ws5.column_dimensions['B'].width = 20
+    ws6.column_dimensions['A'].width = 30
+    ws6.column_dimensions['B'].width = 25
 
     # Save to BytesIO
     buffer = BytesIO()
