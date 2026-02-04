@@ -150,20 +150,56 @@ Where:
 - **SBP-kidney interaction** (every 1 mmHg above 140 accelerates decline)
 - **Age stratification** (faster decline in elderly)
 
-### 5. **Three-Dimensional Baseline Risk Stratification**
+### 5. **Four-Dimensional Baseline Risk Stratification**
 
-Every patient is classified at baseline across **three risk dimensions**:
+Every patient is classified at baseline across **four risk dimensions** using a dual-branch age-based architecture:
 
-#### A. **Renal Risk**
+#### A. **Renal Risk (Mutually Exclusive Pathways)**
 
-**GCUA Phenotypes** (age 60+, eGFR > 60):
+The model routes patients to one of three renal risk systems based on age and eGFR:
+
+```
+                    ┌─────────────────────────────────────┐
+                    │        Patient at Baseline          │
+                    └─────────────────────────────────────┘
+                                      │
+                                      ▼
+                            ┌─────────────────┐
+                            │   eGFR > 60?    │
+                            └─────────────────┘
+                             /              \
+                           Yes              No
+                           /                  \
+                          ▼                    ▼
+                ┌─────────────────┐    ┌─────────────────┐
+                │   Age ≥ 60?     │    │     KDIGO       │
+                └─────────────────┘    │  (CKD pathway)  │
+                 /              \      └─────────────────┘
+               Yes              No
+               /                  \
+              ▼                    ▼
+        ┌─────────────┐    ┌─────────────────┐
+        │    GCUA     │    │     EOCRI       │
+        │ (Geriatric) │    │  (Age 18-59)    │
+        └─────────────┘    └─────────────────┘
+```
+
+**GCUA Phenotypes** (age ≥60, eGFR > 60):
 - **Type I (Accelerated Ager):** High renal + High CVD risk
 - **Type II (Silent Renal):** High renal + Low CVD risk (missed by Framingham)
 - **Type III (Vascular Dominant):** Low renal + High CVD risk
 - **Type IV (Senescent):** High mortality risk (de-escalate treatment)
 - **Moderate/Low:** Standard preventive care
 
-**KDIGO Risk Matrix** (CKD patients):
+**EOCRI Phenotypes** (age 18-59, eGFR > 60) - *NEW*:
+- **Type A (Early Metabolic):** Elevated uACR + Diabetes/Obesity → Aggressive BP + SGLT2i + Statin
+- **Type B (Silent Renal):** Elevated uACR + No Diabetes → Early ASI/RAASi + SGLT2i *(key target population)*
+- **Type C (Premature Vascular):** Normal uACR + High Lipids/Smoker → Statins + Antiplatelets
+- **Low Risk:** Normal uACR + No vascular risk factors → Standard HTN Management
+
+> **Note:** EOCRI Type B patients are the key value driver - they have low short-term CVD risk (would be classified as "low risk" by Framingham) but high long-term renal progression risk due to elevated albuminuria.
+
+**KDIGO Risk Matrix** (eGFR ≤ 60, any age):
 ```
            A1 (<30)   A2 (30-300)   A3 (>300)
 G1 (≥90)     Low       Moderate        High
@@ -174,7 +210,7 @@ G4 (15-29)   Very High Very High       Very High
 G5 (<15)     Very High Very High       Very High
 ```
 
-#### B. **Cardiovascular Risk**
+#### B. **Cardiovascular Risk (All Patients)**
 
 **Framingham 10-Year CVD Risk:**
 - Low (<5%)
@@ -188,6 +224,9 @@ Enables **subgroup cost-effectiveness analysis**:
 - "Is IXA-001 cost-effective specifically in Silent Renal patients?"
 - "What's the ICER for KDIGO Very High Risk subgroup?"
 - "Do high Framingham patients benefit more?"
+- "How do EOCRI Type B (younger silent renal) patients compare to GCUA Type II?"
+
+> **Important:** These risk stratification scores are calculated once at baseline for classification and subgroup analysis. They do **not** directly modify simulation dynamics - the model uses PREVENT risk equations with patient characteristics for event probabilities. See [docs/RISK_STRATIFICATION.md](docs/RISK_STRATIFICATION.md) for detailed documentation.
 
 ### 6. **Patient History Analyzer**
 
