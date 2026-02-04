@@ -332,18 +332,19 @@ The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific
 | C (Premature Vascular) | 1.6× | 1.7× | 1.3× | 0.8× | 1.2× | Normal uACR + (High Lipids OR Smoker) | Young atherosclerosis, kidneys protected |
 | Low | 0.8× | 0.8× | 0.85× | 0.9× | 0.8× | Normal uACR + No vascular risk | Standard HTN management |
 
-**KDIGO Risk Levels (eGFR ≤60):**
-| Risk Level | MI | Stroke | HF | ESRD | Death |
-|------------|-----|--------|-----|------|-------|
-| Very High | 1.4× | 1.5× | 1.6× | 1.8× | 2.0× |
-| High | 1.2× | 1.3× | 1.4× | 1.5× | 1.5× |
-| Moderate | 1.1× | 1.1× | 1.2× | 1.2× | 1.1× |
-| Low | 0.9× | 0.9× | 0.95× | 0.95× | 0.9× |
+**KDIGO Risk Levels (eGFR ≤60, any age):**
+| Risk Level | MI | Stroke | HF | ESRD | Death | GFR + Albuminuria Criteria | Clinical Profile |
+|------------|-----|--------|-----|------|-------|---------------------------|-----------------|
+| Very High | 1.4× | 1.5× | 1.6× | 1.8× | 2.0× | G4-G5 (any) OR G3b+A2/A3 | Advanced CKD, high CV burden |
+| High | 1.2× | 1.3× | 1.4× | 1.5× | 1.5× | G3b+A1 OR G3a+A2 OR G1-G2+A3 | Moderate-severe CKD |
+| Moderate | 1.1× | 1.1× | 1.2× | 1.2× | 1.1× | G3a+A1 OR G1-G2+A2 | Early CKD |
+| Low | 0.9× | 0.9× | 0.95× | 0.95× | 0.9× | G1-G2+A1 | Preserved function |
 
 > **Key Insights**:
 > - **GCUA-III (Vascular Dominant)**: High MI/Stroke (1.4-1.5×) but **protected kidneys** (ESRD 0.8×)
 > - **EOCRI-B (Silent Renal)**: 2× faster ESRD despite 0.7× MI - **missed by Framingham** → target for early SGLT2i
 > - **EOCRI-C (Premature Vascular)**: High MI/Stroke (1.6-1.7×) but **protected kidneys** (ESRD 0.8×) → target for statins
+> - **KDIGO Very High**: 2× mortality reflects cardiorenal syndrome in advanced CKD (G4-G5 or severe albuminuria)
 
 #### Why This Architecture?
 

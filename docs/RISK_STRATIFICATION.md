@@ -227,15 +227,31 @@ The `BaselineRiskProfile.get_dynamic_modifier()` method returns outcome-specific
 > - Protected kidneys (ESRD 0.8×) - no albuminuria
 > - Target for aggressive statins and antiplatelet therapy
 
-**KDIGO Risk Levels (eGFR ≤60):**
-| Risk Level | MI | Stroke | HF | ESRD | Death |
-|------------|-----|--------|-----|------|-------|
-| Very High | 1.4× | 1.5× | 1.6× | 1.8× | 2.0× |
-| High | 1.2× | 1.3× | 1.4× | 1.5× | 1.5× |
-| Moderate | 1.1× | 1.1× | 1.2× | 1.2× | 1.1× |
-| Low | 0.9× | 0.9× | 0.95× | 0.95× | 0.9× |
+**KDIGO Risk Levels (eGFR ≤60, any age):**
 
-> **Key Insight**: EOCRI Type B patients have 2.0× accelerated ESRD progression despite 0.7× MI risk. This captures the "silent renal" phenotype missed by traditional Framingham scoring.
+The KDIGO risk matrix combines GFR category (G1-G5) and Albuminuria category (A1-A3):
+
+| Risk Level | MI | Stroke | HF | ESRD | Death | GFR + Albuminuria Criteria | Clinical Profile |
+|------------|-----|--------|-----|------|-------|---------------------------|-----------------|
+| **Very High** | 1.4× | 1.5× | 1.6× | 1.8× | 2.0× | G4-G5 (any A) OR G3b+A2/A3 OR G3a+A3 | Advanced CKD, high CV burden |
+| **High** | 1.2× | 1.3× | 1.4× | 1.5× | 1.5× | G3b+A1 OR G3a+A2 OR G1-G2+A3 | Moderate-severe CKD or severe albuminuria |
+| **Moderate** | 1.1× | 1.1× | 1.2× | 1.2× | 1.1× | G3a+A1 OR G1-G2+A2 | Early CKD or moderate albuminuria |
+| **Low** | 0.9× | 0.9× | 0.95× | 0.95× | 0.9× | G1-G2+A1 | Preserved function, minimal albuminuria |
+
+**KDIGO Risk Matrix Reference:**
+```
+                    Albuminuria Category
+                    A1 (<30)    A2 (30-300)   A3 (>300)
+GFR Category
+G1 (≥90)            Low         Moderate      High
+G2 (60-89)          Low         Moderate      High
+G3a (45-59)         Moderate    High          Very High
+G3b (30-44)         High        Very High     Very High
+G4 (15-29)          Very High   Very High     Very High
+G5 (<15)            Very High   Very High     Very High
+```
+
+> **Note on KDIGO**: Unlike GCUA/EOCRI which are phenotype-based, KDIGO is a **severity-based** classification for established CKD. Higher risk levels reflect both CV burden (cardiorenal syndrome) and progression risk. The 2.0× mortality modifier for Very High reflects the poor prognosis of advanced CKD.
 
 ### Layer 3: Prior Event Multipliers (`src/transitions.py`)
 | Prior Event | Risk Multiplier |
