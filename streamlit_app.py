@@ -470,9 +470,9 @@ def _run_simulation_with_callback(sim, patients, treatment, total_cycles, progre
                 simulation_log[patient.patient_id]['cycles'].append(cycle_log)
 
             if new_event:
-                if new_event == "NON_CV_DEATH":
+                if new_event == CardiacState.NON_CV_DEATH:
                     results.non_cv_deaths += 1
-                    patient.cardiac_state = "non_cv_death"
+                    patient.cardiac_state = CardiacState.NON_CV_DEATH
                 else:
                     sim._record_event(new_event, results)
                     patient.transition_cardiac(new_event)
@@ -538,6 +538,7 @@ def analyze_subgroups(patients: List[Patient], results: SimulationResults, profi
         'age': {'<60': [], '60-70': [], '70-80': [], '80+': []},
         'ckd_stage': {'Stage 1-2': [], 'Stage 3a': [], 'Stage 3b': [], 'Stage 4': [], 'ESRD': []},
         'primary_aldosteronism': {'With PA': [], 'Without PA': []},  # IXA-001 target population
+        'secondary_htn_etiology': {'PA': [], 'RAS': [], 'Pheo': [], 'OSA': [], 'Essential': []},  # All secondary causes
     }
 
     for i, (patient, profile) in enumerate(zip(patients, profiles)):
@@ -594,6 +595,23 @@ def analyze_subgroups(patients: List[Patient], results: SimulationResults, profi
         else:
             subgroup_data['primary_aldosteronism']['Without PA'].append(patient_data)
 
+        # Secondary HTN Etiology (PA, RAS, Pheo, OSA, Essential)
+        etiology = getattr(profile, 'secondary_htn_etiology', None)
+        if etiology and etiology in subgroup_data['secondary_htn_etiology']:
+            subgroup_data['secondary_htn_etiology'][etiology].append(patient_data)
+        elif not etiology:
+            # Fallback: determine from patient attributes
+            if getattr(patient, 'has_pheochromocytoma', False):
+                subgroup_data['secondary_htn_etiology']['Pheo'].append(patient_data)
+            elif getattr(patient, 'has_primary_aldosteronism', False):
+                subgroup_data['secondary_htn_etiology']['PA'].append(patient_data)
+            elif getattr(patient, 'has_renal_artery_stenosis', False):
+                subgroup_data['secondary_htn_etiology']['RAS'].append(patient_data)
+            elif getattr(patient, 'has_obstructive_sleep_apnea', False) and getattr(patient, 'osa_severity', '') == 'severe':
+                subgroup_data['secondary_htn_etiology']['OSA'].append(patient_data)
+            else:
+                subgroup_data['secondary_htn_etiology']['Essential'].append(patient_data)
+
     return subgroup_data
 
 
@@ -604,31 +622,54 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
                           clinical_params: Optional[ClinicalParams] = None) -> BytesIO:
     """Generate comprehensive Excel report with charts and formatting."""
     from openpyxl import Workbook
-    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side, NamedStyle
     from openpyxl.chart import BarChart, LineChart, Reference
+    from openpyxl.utils import get_column_letter
 
     wb = Workbook()
 
+    # ===== Professional color palette =====
+    PRIMARY_DARK = "1F4E79"
+    PRIMARY_MED = "2E75B6"
+    PRIMARY_LIGHT = "BDD7EE"
+    ACCENT_GREEN = "C6EFCE"
+    ACCENT_GREEN_DARK = "006100"
+    ACCENT_YELLOW = "FFEB9C"
+    ACCENT_RED = "FFC7CE"
+    ACCENT_RED_DARK = "9C0006"
+    NEUTRAL_LIGHT = "F2F2F2"
+
     # ===== Style definitions =====
     header_font = Font(bold=True, color="FFFFFF", size=11)
-    header_fill = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")
-    subheader_fill = PatternFill(start_color="2E75B6", end_color="2E75B6", fill_type="solid")
-    alt_row_fill = PatternFill(start_color="D6DCE4", end_color="D6DCE4", fill_type="solid")
-    highlight_fill = PatternFill(start_color="C6EFCE", end_color="C6EFCE", fill_type="solid")
-    title_font = Font(bold=True, size=18, color="1F4E79")
-    subtitle_font = Font(bold=True, size=14, color="2E75B6")
+    header_fill = PatternFill(start_color=PRIMARY_DARK, end_color=PRIMARY_DARK, fill_type="solid")
+    subheader_fill = PatternFill(start_color=PRIMARY_MED, end_color=PRIMARY_MED, fill_type="solid")
+    subheader_font = Font(bold=True, color="FFFFFF", size=10)
+    alt_row_fill = PatternFill(start_color=NEUTRAL_LIGHT, end_color=NEUTRAL_LIGHT, fill_type="solid")
+    highlight_fill = PatternFill(start_color=ACCENT_GREEN, end_color=ACCENT_GREEN, fill_type="solid")
+    warning_fill = PatternFill(start_color=ACCENT_YELLOW, end_color=ACCENT_YELLOW, fill_type="solid")
+    error_fill = PatternFill(start_color=ACCENT_RED, end_color=ACCENT_RED, fill_type="solid")
+    result_fill = PatternFill(start_color="E2EFDA", end_color="E2EFDA", fill_type="solid")
+    title_font = Font(bold=True, size=20, color=PRIMARY_DARK)
+    subtitle_font = Font(bold=True, size=14, color=PRIMARY_MED)
     border = Border(
         left=Side(style='thin', color='B4B4B4'),
         right=Side(style='thin', color='B4B4B4'),
         top=Side(style='thin', color='B4B4B4'),
         bottom=Side(style='thin', color='B4B4B4')
     )
+    thick_border = Border(
+        left=Side(style='medium', color=PRIMARY_DARK),
+        right=Side(style='medium', color=PRIMARY_DARK),
+        top=Side(style='medium', color=PRIMARY_DARK),
+        bottom=Side(style='medium', color=PRIMARY_DARK)
+    )
     center_align = Alignment(horizontal='center', vertical='center')
+    right_align = Alignment(horizontal='right', vertical='center')
     currency_sym = currency
 
-    def apply_table_style(ws, start_row, end_row, num_cols):
+    def apply_table_style(ws, start_row, end_row, num_cols, start_col=1):
         for row_idx in range(start_row, end_row + 1):
-            for col_idx in range(1, num_cols + 1):
+            for col_idx in range(start_col, start_col + num_cols):
                 cell = ws.cell(row=row_idx, column=col_idx)
                 cell.border = border
                 if row_idx == start_row:
@@ -638,65 +679,126 @@ def generate_excel_report(cea: CEAResults, pop_params: PopulationParams,
                 elif (row_idx - start_row) % 2 == 0:
                     cell.fill = alt_row_fill
 
+    def create_section_header(ws, text, row, col=1, span=4):
+        ws.merge_cells(start_row=row, start_column=col, end_row=row, end_column=col + span - 1)
+        cell = ws.cell(row=row, column=col, value=text)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center_align
+        return row + 1
+
     # ========== Sheet 1: Executive Summary ==========
     ws = wb.active
     ws.title = "Executive Summary"
 
-    ws.merge_cells('A1:D1')
-    ws['A1'] = "Cost-Effectiveness Analysis Report"
-    ws['A1'].font = title_font
-    ws['A1'].alignment = Alignment(horizontal='center')
+    # Header banner
+    for col in range(1, 6):
+        ws.cell(row=1, column=col).fill = header_fill
+        ws.cell(row=2, column=col).fill = header_fill
 
-    ws.merge_cells('A2:D2')
-    ws['A2'] = "IXA-001 vs Spironolactone in Resistant Hypertension"
-    ws['A2'].font = subtitle_font
-    ws['A2'].alignment = Alignment(horizontal='center')
+    ws.merge_cells('A1:E1')
+    ws['A1'] = "COST-EFFECTIVENESS ANALYSIS REPORT"
+    ws['A1'].font = Font(bold=True, size=20, color="FFFFFF")
+    ws['A1'].alignment = center_align
 
-    # Key Results
-    ws['A4'] = "KEY RESULTS"
-    ws['A4'].font = Font(bold=True, size=12, color="FFFFFF")
-    ws['A4'].fill = header_fill
-    ws.merge_cells('A4:B4')
+    ws.merge_cells('A2:E2')
+    ws['A2'] = "IXA-001 vs Spironolactone in Resistant Hypertension | v4.0"
+    ws['A2'].font = Font(bold=False, size=12, color="FFFFFF", italic=True)
+    ws['A2'].alignment = center_align
+
+    # Key Results Section
+    row = 4
+    ws.merge_cells(f'A{row}:C{row}')
+    ws[f'A{row}'] = "KEY RESULTS"
+    ws[f'A{row}'].font = header_font
+    ws[f'A{row}'].fill = header_fill
+    ws[f'A{row}'].alignment = center_align
+
+    # Determine cost-effectiveness interpretation
+    is_dominant = cea.icer is None or (cea.incremental_costs < 0 and cea.incremental_qalys > 0)
+    is_cost_effective = cea.icer and cea.icer < 100000
+    is_marginally_ce = cea.icer and 100000 <= cea.icer < 150000
+
+    if is_dominant:
+        interpretation = "DOMINANT (Lower cost, better outcomes)"
+        interp_fill = highlight_fill
+        interp_color = ACCENT_GREEN_DARK
+    elif is_cost_effective:
+        interpretation = "COST-EFFECTIVE (ICER < $100,000/QALY)"
+        interp_fill = highlight_fill
+        interp_color = ACCENT_GREEN_DARK
+    elif is_marginally_ce:
+        interpretation = "MARGINAL ($100K-$150K/QALY)"
+        interp_fill = warning_fill
+        interp_color = "9C5700"
+    else:
+        interpretation = "REVIEW REQUIRED (ICER > $150,000/QALY)"
+        interp_fill = error_fill
+        interp_color = ACCENT_RED_DARK
 
     results_data = [
-        ["Incremental Costs", f"{currency_sym}{cea.incremental_costs:,.0f}"],
-        ["Incremental QALYs", f"{cea.incremental_qalys:.3f}"],
-        ["ICER", f"{currency_sym}{cea.icer:,.0f}/QALY" if cea.icer else "Dominant"],
-        ["Interpretation", "Cost-Effective" if (cea.icer and cea.icer < 100000) or cea.incremental_qalys > 0 else "Review Required"],
+        ("Incremental Costs", f"{currency_sym}{cea.incremental_costs:,.0f}", None),
+        ("Incremental QALYs", f"{cea.incremental_qalys:.3f}", None),
+        ("ICER", f"{currency_sym}{cea.icer:,.0f}/QALY" if cea.icer else "DOMINANT", highlight_fill if is_dominant else None),
+        ("Interpretation", interpretation, interp_fill),
     ]
 
-    for i, (label, value) in enumerate(results_data, start=5):
-        ws.cell(row=i, column=1, value=label).font = Font(bold=True)
-        ws.cell(row=i, column=2, value=value)
-        if "Dominant" in str(value) or "Cost-Effective" in str(value):
-            ws.cell(row=i, column=2).fill = highlight_fill
+    for i, (label, value, fill) in enumerate(results_data, start=5):
+        cell_label = ws.cell(row=i, column=1, value=label)
+        cell_label.font = Font(bold=True, color=PRIMARY_DARK)
+        cell_label.border = border
+        cell_value = ws.cell(row=i, column=2, value=value)
+        cell_value.border = border
+        cell_value.alignment = right_align
+        if fill:
+            cell_value.fill = fill
+            if "DOMINANT" in str(value) or "COST-EFFECTIVE" in str(value):
+                cell_value.font = Font(bold=True, color=ACCENT_GREEN_DARK)
+            elif "MARGINAL" in str(value):
+                cell_value.font = Font(bold=True, color="9C5700")
+            elif "REVIEW" in str(value):
+                cell_value.font = Font(bold=True, color=ACCENT_RED_DARK)
+        else:
+            cell_value.fill = result_fill
+            cell_value.font = Font(bold=True)
+        # Extend value cell
+        ws.merge_cells(f'B{i}:C{i}')
 
-    # Population Summary
-    ws['A10'] = "POPULATION CHARACTERISTICS"
-    ws['A10'].font = Font(bold=True, size=12, color="FFFFFF")
-    ws['A10'].fill = header_fill
-    ws.merge_cells('A10:B10')
+    # Population Summary Section
+    pop_row = 10
+    ws.merge_cells(f'A{pop_row}:C{pop_row}')
+    ws[f'A{pop_row}'] = "POPULATION CHARACTERISTICS"
+    ws[f'A{pop_row}'].font = header_font
+    ws[f'A{pop_row}'].fill = header_fill
+    ws[f'A{pop_row}'].alignment = center_align
 
     pop_data = [
-        ["Cohort Size", f"{pop_params.n_patients:,} per arm"],
-        ["Mean Age", f"{pop_params.age_mean:.0f} years (SD {pop_params.age_sd:.0f})"],
-        ["% Male", f"{pop_params.prop_male*100:.0f}%"],
-        ["Mean SBP", f"{pop_params.sbp_mean:.0f} mmHg"],
-        ["Mean eGFR", f"{pop_params.egfr_mean:.0f} mL/min/1.73m²"],
-        ["Diabetes", f"{pop_params.diabetes_prev*100:.0f}%"],
-        ["Prior MI", f"{pop_params.prior_mi_prev*100:.0f}%"],
-        ["Heart Failure", f"{pop_params.heart_failure_prev*100:.0f}%"],
+        ("Cohort Size", f"{pop_params.n_patients:,} per arm"),
+        ("Mean Age", f"{pop_params.age_mean:.0f} years (SD {pop_params.age_sd:.0f})"),
+        ("% Male", f"{pop_params.prop_male*100:.0f}%"),
+        ("Mean SBP", f"{pop_params.sbp_mean:.0f} mmHg"),
+        ("Mean eGFR", f"{pop_params.egfr_mean:.0f} mL/min/1.73m²"),
+        ("Diabetes", f"{pop_params.diabetes_prev*100:.0f}%"),
+        ("Prior MI", f"{pop_params.prior_mi_prev*100:.0f}%"),
+        ("Heart Failure", f"{pop_params.heart_failure_prev*100:.0f}%"),
     ]
 
-    for i, (label, value) in enumerate(pop_data, start=11):
-        ws.cell(row=i, column=1, value=label)
-        ws.cell(row=i, column=2, value=value)
-        if i % 2 == 0:
-            ws.cell(row=i, column=1).fill = alt_row_fill
-            ws.cell(row=i, column=2).fill = alt_row_fill
+    for i, (label, value) in enumerate(pop_data, start=pop_row+1):
+        cell_label = ws.cell(row=i, column=1, value=label)
+        cell_label.border = border
+        cell_value = ws.cell(row=i, column=2, value=value)
+        cell_value.border = border
+        if (i - pop_row) % 2 == 0:
+            cell_label.fill = alt_row_fill
+            cell_value.fill = alt_row_fill
 
+    # Set column widths
     ws.column_dimensions['A'].width = 25
-    ws.column_dimensions['B'].width = 25
+    ws.column_dimensions['B'].width = 30
+    ws.column_dimensions['C'].width = 20
+
+    # Freeze header
+    ws.freeze_panes = 'A4'
 
     # ========== Sheet 2: Clinical Events ==========
     ws2 = wb.create_sheet("Clinical Events")
@@ -1031,11 +1133,15 @@ def display_outcomes_table(cea: CEAResults, currency: str):
     """Display outcomes comparison table."""
     st.markdown("### Clinical Outcomes Comparison")
 
+    # Get AF events (new in v4.0 - aldosterone-specific outcome)
+    ixa_af = getattr(cea.intervention, 'new_af_events', 0)
+    spiro_af = getattr(cea.comparator, 'new_af_events', 0)
+
     data = {
         "Outcome": [
             "Mean Total Costs", "Mean QALYs", "Mean Life Years",
             "MI Events", "Stroke Events", "  - Ischemic", "  - Hemorrhagic",
-            "TIA Events", "Heart Failure", "CV Deaths", "Non-CV Deaths",
+            "TIA Events", "Heart Failure", "**Atrial Fibrillation (New)**", "CV Deaths", "Non-CV Deaths",
             "CKD Stage 4", "ESRD Events", "Dementia Cases",
         ],
         "IXA-001": [
@@ -1045,7 +1151,7 @@ def display_outcomes_table(cea: CEAResults, currency: str):
             cea.intervention.mi_events, cea.intervention.stroke_events,
             cea.intervention.ischemic_stroke_events, cea.intervention.hemorrhagic_stroke_events,
             cea.intervention.tia_events, cea.intervention.hf_events,
-            cea.intervention.cv_deaths, cea.intervention.non_cv_deaths,
+            ixa_af, cea.intervention.cv_deaths, cea.intervention.non_cv_deaths,
             cea.intervention.ckd_4_events, cea.intervention.esrd_events,
             cea.intervention.dementia_cases,
         ],
@@ -1056,7 +1162,7 @@ def display_outcomes_table(cea: CEAResults, currency: str):
             cea.comparator.mi_events, cea.comparator.stroke_events,
             cea.comparator.ischemic_stroke_events, cea.comparator.hemorrhagic_stroke_events,
             cea.comparator.tia_events, cea.comparator.hf_events,
-            cea.comparator.cv_deaths, cea.comparator.non_cv_deaths,
+            spiro_af, cea.comparator.cv_deaths, cea.comparator.non_cv_deaths,
             cea.comparator.ckd_4_events, cea.comparator.esrd_events,
             cea.comparator.dementia_cases,
         ],
@@ -1070,7 +1176,7 @@ def display_outcomes_table(cea: CEAResults, currency: str):
             cea.intervention.hemorrhagic_stroke_events - cea.comparator.hemorrhagic_stroke_events,
             cea.intervention.tia_events - cea.comparator.tia_events,
             cea.intervention.hf_events - cea.comparator.hf_events,
-            cea.intervention.cv_deaths - cea.comparator.cv_deaths,
+            ixa_af - spiro_af, cea.intervention.cv_deaths - cea.comparator.cv_deaths,
             cea.intervention.non_cv_deaths - cea.comparator.non_cv_deaths,
             cea.intervention.ckd_4_events - cea.comparator.ckd_4_events,
             cea.intervention.esrd_events - cea.comparator.esrd_events,
@@ -1080,6 +1186,11 @@ def display_outcomes_table(cea: CEAResults, currency: str):
 
     df = pd.DataFrame(data)
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+    # AF prevention note
+    af_prevented = spiro_af - ixa_af
+    if af_prevented > 0:
+        st.success(f"💡 **AF Prevention**: IXA-001 prevented {af_prevented} new AF cases. AF is a key differentiator for aldosterone synthase inhibitors (PA patients have 12× baseline AF risk).")
 
 
 def display_detailed_costs(cea: CEAResults, currency: str):
@@ -1139,7 +1250,7 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
     """Display subgroup analysis results."""
     st.markdown("### Subgroup Analysis")
 
-    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs(["Framingham Risk", "KDIGO Risk", "GCUA Phenotype", "EOCRI Phenotype", "Age Group", "CKD Stage", "Primary Aldosteronism"])
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7, tab8 = st.tabs(["Framingham Risk", "KDIGO Risk", "GCUA Phenotype", "EOCRI Phenotype", "Age Group", "CKD Stage", "Secondary HTN Etiology", "Primary Aldosteronism"])
 
     with tab1:
         st.markdown("**By Framingham CVD Risk Category**")
@@ -1230,8 +1341,57 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
             st.dataframe(pd.DataFrame(ckd_data), hide_index=True, use_container_width=True)
 
     with tab7:
+        st.markdown("**By Secondary HTN Etiology** (Treatment Response Varies by Cause)")
+        st.markdown("""
+        *Secondary causes of resistant hypertension determine treatment response:*
+        - **PA (Primary Aldosteronism)**: IXA-001 response **1.70×** (optimal target)
+        - **OSA (Obstructive Sleep Apnea)**: IXA-001 response 1.20×
+        - **RAS (Renal Artery Stenosis)**: IXA-001 response 1.05×
+        - **Pheo (Pheochromocytoma)**: IXA-001 response 0.40× (contraindicated)
+        - **Essential**: Baseline response 1.0×
+        """)
+        etiology_data = []
+        etiology_names = {
+            'PA': 'Primary Aldosteronism',
+            'RAS': 'Renal Artery Stenosis',
+            'Pheo': 'Pheochromocytoma',
+            'OSA': 'Obstructive Sleep Apnea (Severe)',
+            'Essential': 'Essential HTN'
+        }
+        response_modifiers = {'PA': '1.70×', 'OSA': '1.20×', 'RAS': '1.05×', 'Pheo': '0.40×', 'Essential': '1.0×'}
+        total_patients = sum(len(subgroup_data['secondary_htn_etiology'][c]) for c in subgroup_data['secondary_htn_etiology'])
+        for cat in ['PA', 'RAS', 'Pheo', 'OSA', 'Essential']:
+            patients = subgroup_data['secondary_htn_etiology'][cat]
+            n = len(patients)
+            if n > 0:
+                mean_costs = np.mean([p.get('cumulative_costs', 0) for p in patients])
+                mean_qalys = np.mean([p.get('cumulative_qalys', 0) for p in patients])
+                etiology_data.append({
+                    'Etiology': f"{cat} ({etiology_names.get(cat, '')})",
+                    'N': n,
+                    'Proportion': f"{n / total_patients * 100:.1f}%" if total_patients > 0 else "0%",
+                    'IXA-001 Response': response_modifiers.get(cat, '1.0×'),
+                    'Mean Costs': f"{currency}{mean_costs:,.0f}",
+                    'Mean QALYs': f"{mean_qalys:.3f}"
+                })
+        if etiology_data:
+            st.dataframe(pd.DataFrame(etiology_data), hide_index=True, use_container_width=True)
+            st.success("💡 **PA patients are the optimal IXA-001 target**: 70% enhanced response due to aldosterone being the root cause of hypertension.")
+            st.warning("⚠️ **Pheochromocytoma is contraindicated**: Catecholamine-driven HTN does not respond to aldosterone suppression.")
+        else:
+            st.info("No secondary HTN etiology data available")
+
+    with tab8:
         st.markdown("**By Primary Aldosteronism Status** (IXA-001 Target Population)")
-        st.markdown("*Primary aldosteronism affects 15-20% of resistant HTN patients and is the core target for aldosterone synthase inhibitors.*")
+        st.markdown("""
+        *Primary aldosteronism (PA) affects 15-20% of resistant HTN patients.*
+
+        **Why PA patients respond better to IXA-001:**
+        - Aldosterone is the **root cause** of their hypertension
+        - IXA-001 blocks aldosterone synthesis at source (>90% suppression)
+        - No "aldosterone escape" phenomenon (unlike spironolactone)
+        - **Baseline risk modifiers**: HF 2.05×, ESRD 1.80×, AF 3.0×
+        """)
         pa_data = []
         for cat in ['With PA', 'Without PA']:
             patients = subgroup_data['primary_aldosteronism'][cat]
@@ -1248,17 +1408,19 @@ def display_subgroup_analysis(subgroup_data: Dict, currency: str):
                 })
         if pa_data:
             st.dataframe(pd.DataFrame(pa_data), hide_index=True, use_container_width=True)
-            st.info("💡 Patients with Primary Aldosteronism have ~30% enhanced response to IXA-001 due to aldosterone-driven hypertension.")
+            st.info("💡 **Treatment response modifier**: PA + IXA-001 = 1.70× | PA + Spironolactone = 1.40×")
 
 
 def display_risk_stratification(profiles: List[BaselineRiskProfile]):
     """Display baseline risk stratification summary."""
     st.markdown("### Baseline Risk Stratification")
+    st.markdown("*Dual-branch phenotyping: EOCRI (Age 18-59) and GCUA (Age 60+)*")
 
     framingham_counts = {'Low': 0, 'Borderline': 0, 'Intermediate': 0, 'High': 0}
     kdigo_counts = {'Low': 0, 'Moderate': 0, 'High': 0, 'Very High': 0}
     gcua_counts = {'I': 0, 'II': 0, 'III': 0, 'IV': 0, 'Moderate': 0, 'Low': 0}
     eocri_counts = {'A': 0, 'B': 0, 'C': 0, 'Low': 0}
+    etiology_counts = {'PA': 0, 'RAS': 0, 'Pheo': 0, 'OSA': 0, 'Essential': 0}
 
     for p in profiles:
         if p.framingham_category in framingham_counts:
@@ -1269,6 +1431,10 @@ def display_risk_stratification(profiles: List[BaselineRiskProfile]):
             gcua_counts[p.gcua_phenotype] += 1
         if p.eocri_phenotype in eocri_counts:
             eocri_counts[p.eocri_phenotype] += 1
+        # Secondary HTN etiology
+        etiology = getattr(p, 'secondary_htn_etiology', None)
+        if etiology and etiology in etiology_counts:
+            etiology_counts[etiology] += 1
 
     col1, col2, col3, col4 = st.columns(4)
 
@@ -1302,6 +1468,20 @@ def display_risk_stratification(profiles: List[BaselineRiskProfile]):
         else:
             st.info("No eligible patients")
 
+    # Secondary HTN Etiology row
+    st.markdown("---")
+    st.markdown("**Secondary HTN Etiology Distribution** (Determines IXA-001 Treatment Response)")
+    etiology_names = {'PA': 'Primary Aldosteronism', 'RAS': 'Renal Artery Stenosis', 'Pheo': 'Pheochromocytoma', 'OSA': 'OSA (Severe)', 'Essential': 'Essential HTN'}
+    response_mods = {'PA': '1.70×', 'RAS': '1.05×', 'Pheo': '0.40×', 'OSA': '1.20×', 'Essential': '1.0×'}
+    etiology_df = pd.DataFrame([{
+        'Etiology': f"{k} ({etiology_names.get(k, '')})",
+        'N': v,
+        '%': f"{v/len(profiles)*100:.1f}%",
+        'IXA-001 Response': response_mods.get(k, '1.0×')
+    } for k, v in etiology_counts.items() if v > 0])
+    if not etiology_df.empty:
+        st.dataframe(etiology_df, hide_index=True, use_container_width=True)
+
 
 def display_event_charts(cea: CEAResults):
     """Display event comparison charts."""
@@ -1310,13 +1490,16 @@ def display_event_charts(cea: CEAResults):
     col1, col2 = st.columns(2)
 
     with col1:
+        # Include AF events (new in v4.0)
+        ixa_af = getattr(cea.intervention, 'new_af_events', 0)
+        spiro_af = getattr(cea.comparator, 'new_af_events', 0)
         cardiac_data = pd.DataFrame({
-            "Event": ["MI", "Stroke", "TIA", "HF", "CV Death"],
-            "IXA-001": [cea.intervention.mi_events, cea.intervention.stroke_events, cea.intervention.tia_events, cea.intervention.hf_events, cea.intervention.cv_deaths],
-            "Spironolactone": [cea.comparator.mi_events, cea.comparator.stroke_events, cea.comparator.tia_events, cea.comparator.hf_events, cea.comparator.cv_deaths],
+            "Event": ["MI", "Stroke", "TIA", "HF", "AF (New)", "CV Death"],
+            "IXA-001": [cea.intervention.mi_events, cea.intervention.stroke_events, cea.intervention.tia_events, cea.intervention.hf_events, ixa_af, cea.intervention.cv_deaths],
+            "Spironolactone": [cea.comparator.mi_events, cea.comparator.stroke_events, cea.comparator.tia_events, cea.comparator.hf_events, spiro_af, cea.comparator.cv_deaths],
         })
         st.bar_chart(cardiac_data.set_index("Event"), use_container_width=True)
-        st.caption("Cardiac Events (per 1000 patients)")
+        st.caption("Cardiac Events including Atrial Fibrillation (per 1000 patients)")
 
     with col2:
         renal_data = pd.DataFrame({
@@ -2137,7 +2320,35 @@ def main():
     """Main application entry point."""
     # Header
     st.markdown('<p class="main-header">Cost-Effectiveness Microsimulation</p>', unsafe_allow_html=True)
-    st.markdown('<p class="sub-header">IXA-001 vs Spironolactone in Resistant Hypertension</p>', unsafe_allow_html=True)
+    st.markdown('<p class="sub-header">IXA-001 vs Spironolactone in Resistant Hypertension (v4.0)</p>', unsafe_allow_html=True)
+    st.markdown("""
+    <div style="background-color: #e8f4fc; padding: 10px; border-radius: 5px; margin-bottom: 15px; font-size: 0.9em;">
+    <strong>Model Features:</strong> Dual-branch phenotyping (EOCRI/GCUA) | Secondary HTN etiology (PA, RAS, Pheo, OSA) |
+    Treatment response modifiers | AF tracking | Societal perspective | 20 mmHg SBP reduction (RFP-aligned)
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Model Architecture Diagram
+    with st.expander("📐 Model Architecture Diagram", expanded=False):
+        st.markdown("""
+        This microsimulation model tracks individual patients through parallel **cardiac** and **renal** disease pathways
+        over monthly cycles. Each patient's trajectory is determined by their baseline risk profile, treatment assignment,
+        and stochastic event sampling.
+        """)
+        diagram_path = Path(__file__).parent / "docs" / "model_diagram_horizontal.png"
+        if diagram_path.exists():
+            st.image(str(diagram_path), use_container_width=True)
+        else:
+            st.warning("Model diagram not found. Please ensure docs/model_diagram_horizontal.png exists.")
+
+        st.markdown("""
+        **Key Components:**
+        - **Population Generator**: Creates heterogeneous patient cohort with demographics, risk factors, and comorbidities
+        - **Dual-Branch Phenotyping**: EOCRI (age 18-59) and GCUA (age 60+) risk stratification
+        - **Cardiac Pathway**: MI → Post-MI → Recurrent Events → CHF → CV Death
+        - **Renal Pathway**: CKD Stage 1-2 → 3a → 3b → 4 → ESRD → Renal Death
+        - **Monthly Cycle**: Updates BP, samples events, accrues costs/QALYs, advances time
+        """)
 
     # ============== SIDEBAR ==============
     st.sidebar.markdown("## Simulation Parameters")

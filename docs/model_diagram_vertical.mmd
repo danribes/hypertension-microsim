@@ -1,0 +1,97 @@
+%%{init: {'theme': 'base', 'themeVariables': { 'primaryColor': '#1E5288', 'primaryTextColor': '#fff', 'primaryBorderColor': '#1E5288', 'lineColor': '#1E5288'}, 'flowchart': {'rankSpacing': 40, 'nodeSpacing': 20, 'curve': 'basis', 'htmlLabels': true}}}%%
+
+flowchart TB
+    %% TOP SECTION - POPULATION
+    subgraph TOP[" "]
+        direction LR
+        subgraph pop["<b>INITIAL POPULATION GENERATION</b>"]
+            pg["<b>Population Generator (N=1000)</b><br/>• Demographics: Age (40-85), Sex, BMI<br/>• Risk Factors: SBP (140-200 mmHg), eGFR (15-120 mL/min), uACR<br/>• Comorbidities: Diabetes (35%), COPD (17-32%), Depression (27-50%)<br/>• Baseline Risk Stratification:<br/>&nbsp;&nbsp;&nbsp;◦ <b>EOCRI Phenotypes</b> (Age 18-59): Early-Onset CV Risk Indicators<br/>&nbsp;&nbsp;&nbsp;◦ <b>GCUA Phenotypes</b> (Age 60+): Geriatric CV/CKD/Frailty Assessment<br/>&nbsp;&nbsp;&nbsp;◦ KDIGO Risk Matrix, Framingham CVD Risk"]
+        end
+    end
+
+    %% MIDDLE SECTION - THREE COLUMNS
+    subgraph MIDDLE[" "]
+        direction LR
+
+        %% LEFT COLUMN - CARDIAC
+        subgraph cardiac["<b>CARDIAC DISEASE PATHWAY</b>"]
+            direction TB
+            nocv["<b>No CV Event</b>"]:::green
+            mi["<b>Acute MI</b>"]:::orange
+            tia["<b>TIA</b>"]:::orange
+            stroke["<b>Acute Stroke</b><br/><i>ischemic/hemorrhagic</i>"]:::orange
+            postmi["<b>Post-MI</b>"]:::yellow
+            recurrent["<b>Recurrent Events</b>"]:::yellow
+            poststroke["<b>Post-Stroke</b>"]:::yellow
+            chf["<b>Chronic Heart Failure</b>"]:::yellow
+            cvdeath["<b>CV Death</b>"]:::red
+
+            nocv --> mi & tia & stroke
+            mi --> postmi
+            tia --> recurrent
+            stroke --> poststroke
+            postmi <--> recurrent <--> poststroke
+            postmi & recurrent & poststroke --> chf
+            chf --> cvdeath
+        end
+
+        %% CENTER COLUMN - CYCLE
+        subgraph cycle["<b>MONTHLY CYCLE LOOP</b>"]
+            direction TB
+            update["<b>Update Continuous Variables</b><br/>SBP: age drift + stochastic variation - treatment"]:::cycle
+            check["<b>Check Events</b><br/>Sample from monthly probabilities"]:::cycle
+            accrue["<b>Accrue Outcomes</b><br/>Costs (state + event) + QALYs (utilities)"]:::cycle
+            advance["<b>Advance Time</b><br/>back to start"]:::cycle
+
+            update --> check --> accrue --> advance
+            advance --> update
+        end
+
+        %% RIGHT COLUMN - RENAL
+        subgraph renal["<b>RENAL DISEASE PATHWAY</b>"]
+            direction TB
+            ckd12["<b>CKD Stage 1-2</b><br/>eGFR ≥60"]:::green
+            ckd3a["<b>CKD Stage 3a</b><br/>eGFR 45-59"]:::yellow
+            ckd3b["<b>CKD Stage 3b</b><br/>eGFR 30-44"]:::yellow
+            ckd4["<b>CKD Stage 4</b><br/>eGFR 15-29"]:::orange
+            esrd["<b>ESRD</b><br/>eGFR &lt;15"]:::darkred
+            renaldeath["<b>Renal Death</b>"]:::red
+
+            ckd12 --> ckd3a --> ckd3b --> ckd4 --> esrd --> renaldeath
+        end
+    end
+
+    %% BOTTOM SECTION - FEATURES
+    subgraph BOTTOM[" "]
+        direction LR
+        subgraph features["<b>KEY MODEL FEATURES</b>"]
+            direction LR
+            f1["<b>TUNNEL STATES</b><br/>Post-event time tracking,<br/>Risk decay over time"]:::feature
+            f2["<b>HISTORY ANALYSIS</b><br/>Patient trajectory, Event clustering,<br/>Adherence patterns"]:::feature
+            f3["<b>RISK MODIFIERS</b><br/>Framingham × comorbidities,<br/>eGFR trajectory, Charlson score"]:::feature
+        end
+    end
+
+    %% VERTICAL FLOW
+    TOP --> MIDDLE --> BOTTOM
+
+    %% Invisible links to force column order
+    cardiac ~~~ cycle ~~~ renal
+
+    %% STYLES
+    classDef green fill:#90C050,stroke:#5A8030,color:#000,stroke-width:2px
+    classDef yellow fill:#F8D347,stroke:#C9A020,color:#000,stroke-width:2px
+    classDef orange fill:#F5A623,stroke:#C07010,color:#000,stroke-width:2px
+    classDef red fill:#E74C3C,stroke:#A03020,color:#fff,stroke-width:2px
+    classDef darkred fill:#8B0000,stroke:#500000,color:#fff,stroke-width:2px
+    classDef cycle fill:#B8D4E8,stroke:#1E5288,color:#000,stroke-width:2px
+    classDef feature fill:#E8E8E8,stroke:#1E5288,color:#000,stroke-width:1px
+
+    style TOP fill:none,stroke:none
+    style MIDDLE fill:none,stroke:none
+    style BOTTOM fill:none,stroke:none
+    style pop fill:#1E5288,stroke:#1E5288,color:#fff
+    style cardiac fill:#E8F4FC,stroke:#1E5288,stroke-width:2px
+    style cycle fill:#E8F4FC,stroke:#1E5288,stroke-width:2px
+    style renal fill:#E8F4FC,stroke:#1E5288,stroke-width:2px
+    style features fill:#1E5288,stroke:#1E5288,color:#fff
