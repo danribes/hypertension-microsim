@@ -26,6 +26,7 @@ from .patient import Patient, Treatment
 from .population import PopulationGenerator, PopulationParams
 from .simulation import Simulation, SimulationConfig, SimulationResults
 from .costs.costs import CostInputs, US_COSTS, UK_COSTS
+from . import utilities as utilities_module
 
 
 # =============================================================================
@@ -337,6 +338,66 @@ def get_default_parameter_distributions() -> Dict[str, ParameterDistribution]:
     )
 
     # =========================================================================
+    # SECONDARY CAUSES OF RESISTANT HYPERTENSION
+    # =========================================================================
+    # Treatment response modifiers for each etiology
+    # Reference: Carey RM et al. Hypertension 2018; Resistant HTN guidelines
+
+    # Primary Aldosteronism (PA) - Enhanced response to aldosterone-targeting
+    distributions['pa_ixa_response_modifier'] = ParameterDistribution(
+        name='pa_ixa_response_modifier',
+        distribution='lognormal',
+        params={'mu': np.log(1.35), 'sigma': 0.12},  # Mean ~1.35, 95% CI: 1.1-1.7
+        description='PA patient response modifier for IXA-001'
+    )
+
+    distributions['pa_spiro_response_modifier'] = ParameterDistribution(
+        name='pa_spiro_response_modifier',
+        distribution='lognormal',
+        params={'mu': np.log(1.30), 'sigma': 0.10},  # Mean ~1.30
+        description='PA patient response modifier for spironolactone'
+    )
+
+    # Pheochromocytoma - Poor response to standard therapy
+    distributions['pheo_antihtn_response'] = ParameterDistribution(
+        name='pheo_antihtn_response',
+        distribution='beta',
+        params={'alpha': 4.0, 'beta': 6.0},  # Mean ~0.40
+        description='Pheo patient response to non-alpha-blocker antihypertensives'
+    )
+
+    # Renal Artery Stenosis - ESRD risk modifier
+    distributions['ras_esrd_modifier'] = ParameterDistribution(
+        name='ras_esrd_modifier',
+        distribution='lognormal',
+        params={'mu': np.log(1.80), 'sigma': 0.15},  # Mean ~1.80
+        description='RAS patient ESRD progression risk modifier'
+    )
+
+    # OSA - CPAP benefit on BP control
+    distributions['osa_cpap_bp_benefit'] = ParameterDistribution(
+        name='osa_cpap_bp_benefit',
+        distribution='normal',
+        params={'mean': 5.0, 'sd': 2.5},  # Mean 5 mmHg reduction, SD 2.5
+        description='Additional SBP reduction from CPAP therapy (mmHg)'
+    )
+
+    # Prevalence parameters (for scenario analysis)
+    distributions['pa_prevalence'] = ParameterDistribution(
+        name='pa_prevalence',
+        distribution='beta',
+        params={'alpha': 17.0, 'beta': 83.0},  # Mean ~17%
+        description='Primary aldosteronism prevalence in resistant HTN'
+    )
+
+    distributions['ras_prevalence'] = ParameterDistribution(
+        name='ras_prevalence',
+        distribution='beta',
+        params={'alpha': 8.0, 'beta': 92.0},  # Mean ~8%
+        description='Renal artery stenosis prevalence in resistant HTN'
+    )
+
+    # =========================================================================
     # DISCONTINUATION & ADHERENCE
     # =========================================================================
 
@@ -359,6 +420,50 @@ def get_default_parameter_distributions() -> Dict[str, ParameterDistribution]:
         distribution='beta',
         params={'alpha': 3.0, 'beta': 7.0},  # Mean=0.30
         description='Treatment effect retained when non-adherent'
+    )
+
+    # =========================================================================
+    # DISUTILITIES (for utility parameter uncertainty)
+    # =========================================================================
+
+    distributions['disutility_post_mi'] = ParameterDistribution(
+        name='disutility_post_mi',
+        distribution='beta',
+        params={'alpha': 88.0, 'beta': 12.0},  # Mean=0.12, as per utilities.py
+        description='Disutility for post-MI state',
+        correlation_group='disutilities'
+    )
+
+    distributions['disutility_post_stroke'] = ParameterDistribution(
+        name='disutility_post_stroke',
+        distribution='beta',
+        params={'alpha': 72.0, 'beta': 28.0},  # Mean=0.18
+        description='Disutility for post-stroke state',
+        correlation_group='disutilities'
+    )
+
+    distributions['disutility_chronic_hf'] = ParameterDistribution(
+        name='disutility_chronic_hf',
+        distribution='beta',
+        params={'alpha': 85.0, 'beta': 15.0},  # Mean=0.15
+        description='Disutility for chronic HF state',
+        correlation_group='disutilities'
+    )
+
+    distributions['disutility_esrd'] = ParameterDistribution(
+        name='disutility_esrd',
+        distribution='beta',
+        params={'alpha': 65.0, 'beta': 35.0},  # Mean=0.35
+        description='Disutility for ESRD/dialysis state',
+        correlation_group='disutilities'
+    )
+
+    distributions['disutility_dementia'] = ParameterDistribution(
+        name='disutility_dementia',
+        distribution='beta',
+        params={'alpha': 70.0, 'beta': 30.0},  # Mean=0.30
+        description='Disutility for dementia state',
+        correlation_group='disutilities'
     )
 
     return distributions
@@ -410,6 +515,20 @@ def get_default_correlation_groups() -> Dict[str, CorrelationGroup]:
             [1.0,  0.5,  0.4],   # MI
             [0.5,  1.0,  0.4],   # Stroke
             [0.4,  0.4,  1.0],   # HF
+        ])
+    )
+
+    # Disutilities correlation (EQ-5D measurement methodology)
+    groups['disutilities'] = CorrelationGroup(
+        name='disutilities',
+        parameters=['disutility_post_mi', 'disutility_post_stroke',
+                   'disutility_chronic_hf', 'disutility_esrd', 'disutility_dementia'],
+        correlation_matrix=np.array([
+            [1.0,  0.6,  0.5,  0.4,  0.3],   # Post-MI
+            [0.6,  1.0,  0.5,  0.5,  0.5],   # Post-Stroke
+            [0.5,  0.5,  1.0,  0.4,  0.3],   # Chronic HF
+            [0.4,  0.5,  0.4,  1.0,  0.4],   # ESRD
+            [0.3,  0.5,  0.3,  0.4,  1.0],   # Dementia
         ])
     )
 
@@ -780,6 +899,170 @@ class PSAResults:
         return df
 
     # =========================================================================
+    # INCREMENTAL NET BENEFIT (INB)
+    # =========================================================================
+
+    def calculate_inb(self, wtp_threshold: float = 100000) -> Dict[str, Any]:
+        """
+        Calculate Incremental Net Benefit statistics.
+
+        INB = λ × ΔQ - ΔC
+
+        Where λ is the WTP threshold, ΔQ is incremental QALYs, ΔC is incremental costs.
+
+        Advantages of INB over ICER:
+        - Linear combination, well-defined even when ΔQ ≤ 0
+        - Confidence intervals are straightforward
+        - Hypothesis testing: INB > 0 means cost-effective
+
+        Reference:
+            Stinnett AA, Mullahy J. Net health benefits: a new framework
+            for the analysis of uncertainty in cost-effectiveness.
+            Med Decis Making. 1998;18(2 Suppl):S68-80.
+
+        Args:
+            wtp_threshold: Willingness-to-pay threshold ($/QALY)
+
+        Returns:
+            Dictionary with INB statistics
+        """
+        inb_values = wtp_threshold * self.delta_qalys - self.delta_costs
+
+        return {
+            'wtp_threshold': wtp_threshold,
+            'inb_mean': np.mean(inb_values),
+            'inb_sd': np.std(inb_values),
+            'inb_median': np.median(inb_values),
+            'inb_95ci': (np.percentile(inb_values, 2.5),
+                        np.percentile(inb_values, 97.5)),
+            'prob_inb_positive': np.mean(inb_values > 0),
+            'inb_values': inb_values
+        }
+
+    def generate_inb_curve(
+        self,
+        wtp_range: Optional[np.ndarray] = None
+    ) -> pd.DataFrame:
+        """
+        Generate INB curve across WTP thresholds.
+
+        Args:
+            wtp_range: Array of WTP thresholds
+
+        Returns:
+            DataFrame with columns ['wtp', 'inb_mean', 'inb_lower', 'inb_upper', 'prob_positive']
+        """
+        if wtp_range is None:
+            wtp_range = np.linspace(0, 200000, 201)
+
+        results = []
+        for wtp in wtp_range:
+            inb_stats = self.calculate_inb(wtp)
+            results.append({
+                'wtp': wtp,
+                'inb_mean': inb_stats['inb_mean'],
+                'inb_lower': inb_stats['inb_95ci'][0],
+                'inb_upper': inb_stats['inb_95ci'][1],
+                'prob_positive': inb_stats['prob_inb_positive']
+            })
+
+        return pd.DataFrame(results)
+
+    # =========================================================================
+    # CONVERGENCE DIAGNOSTICS
+    # =========================================================================
+
+    def check_convergence(
+        self,
+        wtp_threshold: float = 100000,
+        window_size: int = 100
+    ) -> Dict[str, Any]:
+        """
+        Check PSA convergence using running mean and standard error.
+
+        Convergence is assessed by examining whether the running mean and
+        probability of cost-effectiveness have stabilized.
+
+        Reference:
+            O'Hagan A, et al. Uncertainty in decision models: Technical
+            Support Document 15. NICE DSU. 2012.
+
+        Args:
+            wtp_threshold: WTP threshold for convergence check
+            window_size: Window size for running calculations
+
+        Returns:
+            Dictionary with convergence diagnostics
+        """
+        if self.n_iterations < window_size * 2:
+            warnings.warn(f"Fewer than {window_size * 2} iterations; "
+                         "convergence diagnostics may be unreliable")
+
+        # Calculate running statistics
+        running_icer_mean = []
+        running_prob_ce = []
+        running_inb_mean = []
+
+        for n in range(window_size, self.n_iterations + 1):
+            subset_delta_costs = self.delta_costs[:n]
+            subset_delta_qalys = self.delta_qalys[:n]
+
+            # Running ICER (only where QALY gain > 0)
+            valid_mask = subset_delta_qalys > 0.001
+            if np.any(valid_mask):
+                icers = subset_delta_costs[valid_mask] / subset_delta_qalys[valid_mask]
+                running_icer_mean.append(np.mean(icers))
+            else:
+                running_icer_mean.append(np.nan)
+
+            # Running probability of CE
+            nmb = wtp_threshold * subset_delta_qalys - subset_delta_costs
+            running_prob_ce.append(np.mean(nmb > 0))
+
+            # Running INB mean
+            inb = wtp_threshold * subset_delta_qalys - subset_delta_costs
+            running_inb_mean.append(np.mean(inb))
+
+        # Assess convergence: coefficient of variation in last 20% of runs
+        n_check = max(int(0.2 * len(running_prob_ce)), 10)
+
+        prob_ce_last = running_prob_ce[-n_check:]
+        prob_ce_cv = np.std(prob_ce_last) / (np.mean(prob_ce_last) + 1e-10)
+
+        inb_last = running_inb_mean[-n_check:]
+        inb_cv = np.std(inb_last) / (abs(np.mean(inb_last)) + 1e-10)
+
+        # Convergence criteria
+        # CV < 1% generally indicates good convergence
+        prob_ce_converged = prob_ce_cv < 0.01
+        inb_converged = inb_cv < 0.01
+
+        return {
+            'n_iterations': self.n_iterations,
+            'wtp_threshold': wtp_threshold,
+            'window_size': window_size,
+            'running_icer_mean': np.array(running_icer_mean),
+            'running_prob_ce': np.array(running_prob_ce),
+            'running_inb_mean': np.array(running_inb_mean),
+            'prob_ce_cv': prob_ce_cv,
+            'inb_cv': inb_cv,
+            'prob_ce_converged': prob_ce_converged,
+            'inb_converged': inb_converged,
+            'overall_converged': prob_ce_converged and inb_converged,
+            'recommendation': self._convergence_recommendation(prob_ce_cv, inb_cv)
+        }
+
+    def _convergence_recommendation(self, prob_ce_cv: float, inb_cv: float) -> str:
+        """Generate convergence recommendation."""
+        if prob_ce_cv < 0.01 and inb_cv < 0.01:
+            return "PSA appears converged. Results are stable."
+        elif prob_ce_cv < 0.05 and inb_cv < 0.05:
+            return "PSA shows reasonable convergence. Consider more iterations for precise estimates."
+        else:
+            return f"PSA may not have converged (CV: prob_CE={prob_ce_cv:.3f}, INB={inb_cv:.3f}). " \
+                   "Recommend increasing n_iterations."
+
+    # =========================================================================
     # EXPORT
     # =========================================================================
 
@@ -1011,10 +1294,533 @@ class PSARunner:
         if 'cost_ixa_monthly' in parameters:
             costs.ixa_001_monthly = parameters['cost_ixa_monthly']
 
-        # Note: Utility parameters would need similar treatment
-        # but require modifying the utilities module
+        # Apply disutility parameters to the utilities module
+        if 'disutility_post_mi' in parameters:
+            utilities_module.DISUTILITY['post_mi'] = parameters['disutility_post_mi']
+        if 'disutility_post_stroke' in parameters:
+            utilities_module.DISUTILITY['post_stroke'] = parameters['disutility_post_stroke']
+        if 'disutility_chronic_hf' in parameters:
+            utilities_module.DISUTILITY['chronic_hf'] = parameters['disutility_chronic_hf']
+        if 'disutility_esrd' in parameters:
+            utilities_module.DISUTILITY['esrd'] = parameters['disutility_esrd']
+        if 'disutility_dementia' in parameters:
+            utilities_module.DISUTILITY['dementia'] = parameters['disutility_dementia']
 
         return config
+
+
+# =============================================================================
+# DETERMINISTIC SENSITIVITY ANALYSIS (DSA)
+# =============================================================================
+
+@dataclass
+class DSAResult:
+    """Results from a single DSA parameter variation."""
+    parameter: str
+    base_value: float
+    low_value: float
+    high_value: float
+    icer_base: float
+    icer_low: float
+    icer_high: float
+    inb_base: float
+    inb_low: float
+    inb_high: float
+    icer_range: float = field(init=False)
+    inb_range: float = field(init=False)
+
+    def __post_init__(self):
+        # Handle None ICERs
+        low = self.icer_low if self.icer_low is not None else self.icer_base
+        high = self.icer_high if self.icer_high is not None else self.icer_base
+        self.icer_range = abs(high - low)
+        self.inb_range = abs(self.inb_high - self.inb_low)
+
+
+class DeterministicSensitivityAnalysis:
+    """
+    One-way Deterministic Sensitivity Analysis (DSA) for tornado diagrams.
+
+    DSA systematically varies one parameter at a time while holding others
+    at base case values to identify which parameters have the greatest
+    impact on model results.
+
+    Reference:
+        Briggs A, et al. Decision Modelling for Health Economic Evaluation.
+        Oxford University Press. 2006. Chapter 4.
+    """
+
+    def __init__(
+        self,
+        base_config: SimulationConfig,
+        seed: Optional[int] = None
+    ):
+        """
+        Initialize DSA.
+
+        Args:
+            base_config: Base simulation configuration
+            seed: Random seed for reproducibility
+        """
+        self.base_config = base_config
+        self.seed = seed
+        self.distributions = get_default_parameter_distributions()
+
+    def run(
+        self,
+        parameters: Optional[List[str]] = None,
+        variation_pct: float = 0.20,
+        wtp_threshold: float = 100000,
+        show_progress: bool = True
+    ) -> List[DSAResult]:
+        """
+        Run one-way DSA for specified parameters.
+
+        Args:
+            parameters: List of parameter names to vary (default: all)
+            variation_pct: Percentage variation from base (default: ±20%)
+            wtp_threshold: WTP threshold for INB calculation
+            show_progress: Show progress bar
+
+        Returns:
+            List of DSAResult objects sorted by ICER range
+        """
+        if parameters is None:
+            # Use key parameters that typically drive results
+            parameters = [
+                'ixa_sbp_mean', 'spiro_sbp_mean',
+                'cost_mi_acute', 'cost_ischemic_stroke_acute', 'cost_hf_acute',
+                'cost_esrd_annual', 'cost_ixa_monthly',
+                'disutility_post_mi', 'disutility_post_stroke',
+                'disutility_esrd', 'disutility_chronic_hf',
+                'discontinuation_rate_ixa', 'discontinuation_rate_spiro'
+            ]
+
+        # Run base case first
+        base_results = self._run_scenario({}, wtp_threshold)
+        base_icer = base_results['icer']
+        base_inb = base_results['inb']
+
+        results = []
+        iterator = parameters
+        if show_progress:
+            iterator = tqdm(parameters, desc="DSA Parameters")
+
+        for param in iterator:
+            if param not in self.distributions:
+                warnings.warn(f"Parameter {param} not found in distributions, skipping")
+                continue
+
+            dist = self.distributions[param]
+            base_value = self._get_base_value(dist)
+
+            # Calculate low and high values
+            low_value = base_value * (1 - variation_pct)
+            high_value = base_value * (1 + variation_pct)
+
+            # Run low scenario
+            low_results = self._run_scenario({param: low_value}, wtp_threshold)
+
+            # Run high scenario
+            high_results = self._run_scenario({param: high_value}, wtp_threshold)
+
+            results.append(DSAResult(
+                parameter=param,
+                base_value=base_value,
+                low_value=low_value,
+                high_value=high_value,
+                icer_base=base_icer,
+                icer_low=low_results['icer'],
+                icer_high=high_results['icer'],
+                inb_base=base_inb,
+                inb_low=low_results['inb'],
+                inb_high=high_results['inb']
+            ))
+
+        # Sort by ICER range (descending)
+        results.sort(key=lambda x: x.icer_range, reverse=True)
+
+        return results
+
+    def _get_base_value(self, dist: ParameterDistribution) -> float:
+        """Get base case (mean) value for a distribution."""
+        if dist.distribution == 'normal':
+            return dist.params['mean']
+        elif dist.distribution == 'lognormal':
+            return np.exp(dist.params['mu'] + dist.params['sigma']**2 / 2)
+        elif dist.distribution == 'gamma':
+            return dist.params['shape'] * dist.params['scale']
+        elif dist.distribution == 'beta':
+            alpha, beta = dist.params['alpha'], dist.params['beta']
+            return alpha / (alpha + beta)
+        elif dist.distribution == 'uniform':
+            return (dist.params['low'] + dist.params['high']) / 2
+        else:
+            return 0.0
+
+    def _run_scenario(
+        self,
+        param_overrides: Dict[str, float],
+        wtp_threshold: float
+    ) -> Dict[str, Any]:
+        """Run a single DSA scenario."""
+        from . import treatment as treatment_module
+        from .costs import costs as costs_module
+
+        # Reset to base values first
+        self._reset_parameters()
+
+        # Apply overrides
+        for param, value in param_overrides.items():
+            self._apply_single_parameter(param, value)
+
+        # Run simulation
+        config = deepcopy(self.base_config)
+        config.seed = self.seed
+        config.show_progress = False
+
+        pop_params = PopulationParams(n_patients=config.n_patients, seed=self.seed)
+
+        # IXA-001 arm
+        generator = PopulationGenerator(pop_params)
+        patients_ixa = generator.generate()
+        sim_ixa = Simulation(config)
+        results_ixa = sim_ixa.run(patients_ixa, Treatment.IXA_001)
+
+        # Comparator arm
+        generator = PopulationGenerator(pop_params)
+        patients_comp = generator.generate()
+        sim_comp = Simulation(config)
+        results_comp = sim_comp.run(patients_comp, Treatment.SPIRONOLACTONE)
+
+        # Calculate results
+        delta_costs = results_ixa.mean_costs - results_comp.mean_costs
+        delta_qalys = results_ixa.mean_qalys - results_comp.mean_qalys
+
+        icer = delta_costs / delta_qalys if delta_qalys > 0.001 else None
+        inb = wtp_threshold * delta_qalys - delta_costs
+
+        return {
+            'icer': icer,
+            'inb': inb,
+            'delta_costs': delta_costs,
+            'delta_qalys': delta_qalys
+        }
+
+    def _apply_single_parameter(self, param: str, value: float):
+        """Apply a single parameter value."""
+        from . import treatment as treatment_module
+        from .costs import costs as costs_module
+
+        costs = costs_module.US_COSTS if self.base_config.cost_perspective == "US" else costs_module.UK_COSTS
+
+        # Treatment effects
+        if param == 'ixa_sbp_mean':
+            treatment_module.TREATMENT_EFFECTS[Treatment.IXA_001].sbp_reduction = value
+        elif param == 'spiro_sbp_mean':
+            treatment_module.TREATMENT_EFFECTS[Treatment.SPIRONOLACTONE].sbp_reduction = value
+        elif param == 'discontinuation_rate_ixa':
+            treatment_module.TREATMENT_EFFECTS[Treatment.IXA_001].discontinuation_rate = value
+        elif param == 'discontinuation_rate_spiro':
+            treatment_module.TREATMENT_EFFECTS[Treatment.SPIRONOLACTONE].discontinuation_rate = value
+        # Costs
+        elif param == 'cost_mi_acute':
+            costs.mi_acute = value
+        elif param == 'cost_ischemic_stroke_acute':
+            costs.ischemic_stroke_acute = value
+        elif param == 'cost_hemorrhagic_stroke_acute':
+            costs.hemorrhagic_stroke_acute = value
+        elif param == 'cost_hf_acute':
+            costs.hf_admission = value
+        elif param == 'cost_esrd_annual':
+            costs.esrd_annual = value
+        elif param == 'cost_ixa_monthly':
+            costs.ixa_001_monthly = value
+        # Disutilities
+        elif param == 'disutility_post_mi':
+            utilities_module.DISUTILITY['post_mi'] = value
+        elif param == 'disutility_post_stroke':
+            utilities_module.DISUTILITY['post_stroke'] = value
+        elif param == 'disutility_chronic_hf':
+            utilities_module.DISUTILITY['chronic_hf'] = value
+        elif param == 'disutility_esrd':
+            utilities_module.DISUTILITY['esrd'] = value
+        elif param == 'disutility_dementia':
+            utilities_module.DISUTILITY['dementia'] = value
+
+    def _reset_parameters(self):
+        """Reset all parameters to base case values."""
+        from . import treatment as treatment_module
+        from .costs import costs as costs_module
+
+        # Reset treatment effects to defaults
+        treatment_module.TREATMENT_EFFECTS[Treatment.IXA_001].sbp_reduction = 20.0
+        treatment_module.TREATMENT_EFFECTS[Treatment.IXA_001].discontinuation_rate = 0.12
+        treatment_module.TREATMENT_EFFECTS[Treatment.SPIRONOLACTONE].sbp_reduction = 9.0
+        treatment_module.TREATMENT_EFFECTS[Treatment.SPIRONOLACTONE].discontinuation_rate = 0.15
+
+        # Reset costs to defaults (US perspective)
+        costs = costs_module.US_COSTS
+        costs.mi_acute = 25000.0
+        costs.ischemic_stroke_acute = 15200.0
+        costs.hemorrhagic_stroke_acute = 22500.0
+        costs.hf_admission = 18000.0
+        costs.esrd_annual = 90000.0
+        costs.ixa_001_monthly = 500.0
+
+        # Reset disutilities to defaults
+        utilities_module.DISUTILITY['post_mi'] = 0.12
+        utilities_module.DISUTILITY['post_stroke'] = 0.18
+        utilities_module.DISUTILITY['chronic_hf'] = 0.15
+        utilities_module.DISUTILITY['esrd'] = 0.35
+        utilities_module.DISUTILITY['dementia'] = 0.30
+
+    def to_dataframe(self, results: List[DSAResult]) -> pd.DataFrame:
+        """Convert DSA results to DataFrame for tornado diagram."""
+        records = []
+        for r in results:
+            records.append({
+                'parameter': r.parameter,
+                'base_value': r.base_value,
+                'low_value': r.low_value,
+                'high_value': r.high_value,
+                'icer_base': r.icer_base,
+                'icer_low': r.icer_low,
+                'icer_high': r.icer_high,
+                'icer_range': r.icer_range,
+                'inb_base': r.inb_base,
+                'inb_low': r.inb_low,
+                'inb_high': r.inb_high,
+                'inb_range': r.inb_range
+            })
+        return pd.DataFrame(records)
+
+
+# =============================================================================
+# SCENARIO ANALYSIS
+# =============================================================================
+
+@dataclass
+class ScenarioResult:
+    """Results from a scenario analysis."""
+    name: str
+    description: str
+    parameters: Dict[str, float]
+    ixa_costs: float
+    ixa_qalys: float
+    comparator_costs: float
+    comparator_qalys: float
+    delta_costs: float = field(init=False)
+    delta_qalys: float = field(init=False)
+    icer: Optional[float] = field(init=False)
+
+    def __post_init__(self):
+        self.delta_costs = self.ixa_costs - self.comparator_costs
+        self.delta_qalys = self.ixa_qalys - self.comparator_qalys
+        self.icer = self.delta_costs / self.delta_qalys if self.delta_qalys > 0.001 else None
+
+
+class ScenarioAnalysis:
+    """
+    Scenario analysis for exploring structural uncertainty.
+
+    Scenario analysis complements PSA by examining the impact of
+    alternative structural assumptions or parameter sets.
+
+    Common scenarios:
+    - Best case / Worst case
+    - Optimistic / Pessimistic treatment effects
+    - Alternative cost perspectives
+    - Subgroup analyses
+
+    Reference:
+        ISPOR-SMDM Modeling Good Research Practices Task Force.
+        Model Transparency and Validation. Value Health. 2012;15(6):843-850.
+    """
+
+    def __init__(
+        self,
+        base_config: SimulationConfig,
+        seed: Optional[int] = None
+    ):
+        self.base_config = base_config
+        self.seed = seed
+        self.distributions = get_default_parameter_distributions()
+
+    def run_predefined_scenarios(
+        self,
+        show_progress: bool = True
+    ) -> List[ScenarioResult]:
+        """
+        Run predefined scenario analyses.
+
+        Returns:
+            List of ScenarioResult objects
+        """
+        scenarios = self._get_predefined_scenarios()
+        results = []
+
+        iterator = scenarios.items()
+        if show_progress:
+            iterator = tqdm(list(iterator), desc="Scenarios")
+
+        for name, scenario in iterator:
+            result = self._run_single_scenario(
+                name=name,
+                description=scenario['description'],
+                parameters=scenario['parameters']
+            )
+            results.append(result)
+
+        return results
+
+    def run_custom_scenario(
+        self,
+        name: str,
+        description: str,
+        parameters: Dict[str, float]
+    ) -> ScenarioResult:
+        """
+        Run a custom scenario analysis.
+
+        Args:
+            name: Scenario name
+            description: Scenario description
+            parameters: Dictionary of parameter overrides
+
+        Returns:
+            ScenarioResult object
+        """
+        return self._run_single_scenario(name, description, parameters)
+
+    def _get_predefined_scenarios(self) -> Dict[str, Dict]:
+        """Define predefined scenarios."""
+        return {
+            'base_case': {
+                'description': 'Base case analysis with mean parameter values',
+                'parameters': {}
+            },
+            'optimistic_ixa': {
+                'description': 'Optimistic IXA-001 efficacy (upper 95% CI)',
+                'parameters': {
+                    'ixa_sbp_mean': 24.0,  # +2 SD
+                    'discontinuation_rate_ixa': 0.08
+                }
+            },
+            'pessimistic_ixa': {
+                'description': 'Pessimistic IXA-001 efficacy (lower 95% CI)',
+                'parameters': {
+                    'ixa_sbp_mean': 16.0,  # -2 SD
+                    'discontinuation_rate_ixa': 0.18
+                }
+            },
+            'high_event_costs': {
+                'description': 'Higher acute event costs (+50%)',
+                'parameters': {
+                    'cost_mi_acute': 37500.0,
+                    'cost_ischemic_stroke_acute': 22800.0,
+                    'cost_hf_acute': 27000.0
+                }
+            },
+            'low_event_costs': {
+                'description': 'Lower acute event costs (-30%)',
+                'parameters': {
+                    'cost_mi_acute': 17500.0,
+                    'cost_ischemic_stroke_acute': 10640.0,
+                    'cost_hf_acute': 12600.0
+                }
+            },
+            'high_ixa_cost': {
+                'description': 'Higher IXA-001 drug cost ($750/month)',
+                'parameters': {
+                    'cost_ixa_monthly': 750.0
+                }
+            },
+            'low_ixa_cost': {
+                'description': 'Lower IXA-001 drug cost ($350/month, generic)',
+                'parameters': {
+                    'cost_ixa_monthly': 350.0
+                }
+            },
+            'worse_utilities': {
+                'description': 'Higher disutilities for health states (+25%)',
+                'parameters': {
+                    'disutility_post_mi': 0.15,
+                    'disutility_post_stroke': 0.225,
+                    'disutility_chronic_hf': 0.1875,
+                    'disutility_esrd': 0.4375
+                }
+            },
+            'better_utilities': {
+                'description': 'Lower disutilities for health states (-25%)',
+                'parameters': {
+                    'disutility_post_mi': 0.09,
+                    'disutility_post_stroke': 0.135,
+                    'disutility_chronic_hf': 0.1125,
+                    'disutility_esrd': 0.2625
+                }
+            }
+        }
+
+    def _run_single_scenario(
+        self,
+        name: str,
+        description: str,
+        parameters: Dict[str, float]
+    ) -> ScenarioResult:
+        """Run a single scenario."""
+        dsa = DeterministicSensitivityAnalysis(self.base_config, self.seed)
+
+        # Reset and apply scenario parameters
+        dsa._reset_parameters()
+        for param, value in parameters.items():
+            dsa._apply_single_parameter(param, value)
+
+        # Run simulation
+        config = deepcopy(self.base_config)
+        config.seed = self.seed
+        config.show_progress = False
+
+        pop_params = PopulationParams(n_patients=config.n_patients, seed=self.seed)
+
+        # IXA-001 arm
+        generator = PopulationGenerator(pop_params)
+        patients_ixa = generator.generate()
+        sim_ixa = Simulation(config)
+        results_ixa = sim_ixa.run(patients_ixa, Treatment.IXA_001)
+
+        # Comparator arm
+        generator = PopulationGenerator(pop_params)
+        patients_comp = generator.generate()
+        sim_comp = Simulation(config)
+        results_comp = sim_comp.run(patients_comp, Treatment.SPIRONOLACTONE)
+
+        return ScenarioResult(
+            name=name,
+            description=description,
+            parameters=parameters,
+            ixa_costs=results_ixa.mean_costs,
+            ixa_qalys=results_ixa.mean_qalys,
+            comparator_costs=results_comp.mean_costs,
+            comparator_qalys=results_comp.mean_qalys
+        )
+
+    def to_dataframe(self, results: List[ScenarioResult]) -> pd.DataFrame:
+        """Convert scenario results to DataFrame."""
+        records = []
+        for r in results:
+            records.append({
+                'scenario': r.name,
+                'description': r.description,
+                'ixa_costs': r.ixa_costs,
+                'ixa_qalys': r.ixa_qalys,
+                'comparator_costs': r.comparator_costs,
+                'comparator_qalys': r.comparator_qalys,
+                'delta_costs': r.delta_costs,
+                'delta_qalys': r.delta_qalys,
+                'icer': r.icer
+            })
+        return pd.DataFrame(records)
 
 
 # =============================================================================
@@ -1060,9 +1866,11 @@ def run_psa(
     )
 
 
-def print_psa_summary(results: PSAResults):
+def print_psa_summary(results: PSAResults, wtp_threshold: float = 100000):
     """Print formatted PSA summary."""
     summary = results.get_summary_statistics()
+    inb_stats = results.calculate_inb(wtp_threshold)
+    convergence = results.check_convergence(wtp_threshold)
 
     print("\n" + "="*70)
     print("PROBABILISTIC SENSITIVITY ANALYSIS RESULTS")
@@ -1091,12 +1899,124 @@ def print_psa_summary(results: PSAResults):
     else:
         print("  Not calculable (insufficient QALY gains)")
 
+    print(f"\nIncremental Net Benefit (at ${wtp_threshold:,.0f}/QALY):")
+    print(f"  Mean: ${inb_stats['inb_mean']:,.0f}")
+    print(f"  95% CI: (${inb_stats['inb_95ci'][0]:,.0f}, ${inb_stats['inb_95ci'][1]:,.0f})")
+    print(f"  P(INB > 0): {inb_stats['prob_inb_positive']*100:.1f}%")
+
     print(f"\nProbability Cost-Effective:")
     print(f"  At $50,000/QALY:  {summary['prop_ce_50k']*100:.1f}%")
     print(f"  At $100,000/QALY: {summary['prop_ce_100k']*100:.1f}%")
     print(f"  At $150,000/QALY: {summary['prop_ce_150k']*100:.1f}%")
 
+    print(f"\nConvergence Diagnostics:")
+    print(f"  P(CE) CV: {convergence['prob_ce_cv']:.4f}")
+    print(f"  INB CV: {convergence['inb_cv']:.4f}")
+    print(f"  Status: {convergence['recommendation']}")
+
     print("="*70 + "\n")
+
+
+def run_dsa(
+    n_patients: int = 200,
+    time_horizon_years: int = 40,
+    seed: Optional[int] = 42,
+    parameters: Optional[List[str]] = None,
+    variation_pct: float = 0.20,
+    show_progress: bool = True
+) -> List[DSAResult]:
+    """
+    Convenience function to run Deterministic Sensitivity Analysis.
+
+    Args:
+        n_patients: Patients per scenario
+        time_horizon_years: Simulation time horizon
+        seed: Random seed
+        parameters: Parameters to vary (default: key parameters)
+        variation_pct: Percentage variation (default: ±20%)
+        show_progress: Show progress bar
+
+    Returns:
+        List of DSAResult objects sorted by ICER range
+    """
+    config = SimulationConfig(
+        n_patients=n_patients,
+        time_horizon_months=time_horizon_years * 12,
+        seed=seed,
+        show_progress=False
+    )
+
+    dsa = DeterministicSensitivityAnalysis(config, seed=seed)
+    return dsa.run(parameters=parameters, variation_pct=variation_pct, show_progress=show_progress)
+
+
+def print_dsa_summary(results: List[DSAResult], top_n: int = 10):
+    """Print formatted DSA summary (tornado diagram data)."""
+    print("\n" + "="*70)
+    print("DETERMINISTIC SENSITIVITY ANALYSIS (ONE-WAY)")
+    print("="*70)
+
+    print(f"\nTop {min(top_n, len(results))} Most Influential Parameters (by ICER range):")
+    print("-"*70)
+    print(f"{'Parameter':<35} {'Low ICER':>12} {'High ICER':>12} {'Range':>10}")
+    print("-"*70)
+
+    for r in results[:top_n]:
+        low_str = f"${r.icer_low:,.0f}" if r.icer_low is not None else "N/A"
+        high_str = f"${r.icer_high:,.0f}" if r.icer_high is not None else "N/A"
+        print(f"{r.parameter:<35} {low_str:>12} {high_str:>12} ${r.icer_range:>9,.0f}")
+
+    if results:
+        print("-"*70)
+        print(f"Base case ICER: ${results[0].icer_base:,.0f}" if results[0].icer_base else "Base case ICER: N/A")
+
+    print("="*70 + "\n")
+
+
+def run_scenario_analysis(
+    n_patients: int = 200,
+    time_horizon_years: int = 40,
+    seed: Optional[int] = 42,
+    show_progress: bool = True
+) -> List[ScenarioResult]:
+    """
+    Convenience function to run scenario analysis.
+
+    Args:
+        n_patients: Patients per scenario
+        time_horizon_years: Simulation time horizon
+        seed: Random seed
+        show_progress: Show progress bar
+
+    Returns:
+        List of ScenarioResult objects
+    """
+    config = SimulationConfig(
+        n_patients=n_patients,
+        time_horizon_months=time_horizon_years * 12,
+        seed=seed,
+        show_progress=False
+    )
+
+    sa = ScenarioAnalysis(config, seed=seed)
+    return sa.run_predefined_scenarios(show_progress=show_progress)
+
+
+def print_scenario_summary(results: List[ScenarioResult]):
+    """Print formatted scenario analysis summary."""
+    print("\n" + "="*80)
+    print("SCENARIO ANALYSIS")
+    print("="*80)
+
+    print(f"\n{'Scenario':<25} {'Description':<35} {'ICER':>15}")
+    print("-"*80)
+
+    for r in results:
+        icer_str = f"${r.icer:,.0f}" if r.icer is not None else "Dominated"
+        desc = r.description[:33] + ".." if len(r.description) > 35 else r.description
+        print(f"{r.name:<25} {desc:<35} {icer_str:>15}")
+
+    print("="*80 + "\n")
 
 
 # =============================================================================
@@ -1215,5 +2135,197 @@ def plot_evpi(results: PSAResults, population_size: float = 11000):
     ax.set_title(f'Expected Value of Perfect Information\n(Population = {population_size:,})')
     ax.set_xlim(0, 200)
 
+    plt.tight_layout()
+    return fig
+
+
+def plot_tornado(
+    dsa_results: List[DSAResult],
+    top_n: int = 10,
+    wtp_threshold: float = 100000
+):
+    """
+    Plot tornado diagram from DSA results.
+
+    Args:
+        dsa_results: List of DSAResult objects
+        top_n: Number of top parameters to display
+        wtp_threshold: Reference line for WTP threshold
+
+    Requires matplotlib.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib required for plotting. Install with: pip install matplotlib")
+        return
+
+    # Take top N results
+    results = dsa_results[:top_n]
+    n = len(results)
+
+    # Extract data (reverse order for correct tornado display)
+    parameters = [r.parameter for r in results][::-1]
+    base_icer = results[0].icer_base if results else 0
+
+    # Calculate bars (relative to base)
+    low_icers = []
+    high_icers = []
+    for r in results[::-1]:
+        low = r.icer_low if r.icer_low is not None else base_icer
+        high = r.icer_high if r.icer_high is not None else base_icer
+        low_icers.append(low - base_icer)
+        high_icers.append(high - base_icer)
+
+    fig, ax = plt.subplots(figsize=(12, max(6, n * 0.5)))
+
+    y_pos = np.arange(n)
+
+    # Plot bars
+    colors_low = ['#2ecc71' if v < 0 else '#e74c3c' for v in low_icers]
+    colors_high = ['#e74c3c' if v > 0 else '#2ecc71' for v in high_icers]
+
+    for i in range(n):
+        ax.barh(y_pos[i], low_icers[i], align='center', color=colors_low[i], alpha=0.7, height=0.6)
+        ax.barh(y_pos[i], high_icers[i], align='center', color=colors_high[i], alpha=0.7, height=0.6)
+
+    # Reference line at base case
+    ax.axvline(x=0, color='black', linestyle='-', linewidth=1.5)
+
+    # WTP reference line (relative to base)
+    if base_icer is not None:
+        wtp_relative = wtp_threshold - base_icer
+        ax.axvline(x=wtp_relative, color='gray', linestyle='--', linewidth=1,
+                   label=f'WTP ${wtp_threshold:,.0f}')
+
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(parameters)
+    ax.set_xlabel('Change in ICER from Base Case ($)')
+    ax.set_title(f'Tornado Diagram: One-Way Sensitivity Analysis\n(Base Case ICER: ${base_icer:,.0f}/QALY)')
+    ax.legend(loc='best')
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_inb_curve(results: PSAResults):
+    """
+    Plot Incremental Net Benefit curve with confidence intervals.
+
+    Args:
+        results: PSA results
+
+    Requires matplotlib.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib required for plotting. Install with: pip install matplotlib")
+        return
+
+    inb_data = results.generate_inb_curve()
+
+    fig, ax = plt.subplots(figsize=(10, 6))
+
+    # Plot mean INB
+    ax.plot(inb_data['wtp'] / 1000, inb_data['inb_mean'] / 1000,
+            'b-', linewidth=2, label='Mean INB')
+
+    # Plot confidence interval
+    ax.fill_between(inb_data['wtp'] / 1000,
+                    inb_data['inb_lower'] / 1000,
+                    inb_data['inb_upper'] / 1000,
+                    alpha=0.3, color='blue', label='95% CI')
+
+    # Reference line at INB = 0
+    ax.axhline(y=0, color='gray', linestyle='--', linewidth=1)
+
+    # Common WTP thresholds
+    for wtp in [50, 100, 150]:
+        ax.axvline(x=wtp, color='lightgray', linestyle=':', linewidth=0.5)
+
+    ax.set_xlabel('Willingness-to-Pay Threshold ($1,000/QALY)')
+    ax.set_ylabel('Incremental Net Benefit ($1,000)')
+    ax.set_title('Incremental Net Benefit Curve\nIXA-001 vs Spironolactone')
+    ax.set_xlim(0, 200)
+    ax.legend(loc='best')
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_convergence(results: PSAResults, wtp_threshold: float = 100000):
+    """
+    Plot PSA convergence diagnostics.
+
+    Args:
+        results: PSA results
+        wtp_threshold: WTP threshold
+
+    Requires matplotlib.
+    """
+    try:
+        import matplotlib.pyplot as plt
+    except ImportError:
+        print("matplotlib required for plotting. Install with: pip install matplotlib")
+        return
+
+    convergence = results.check_convergence(wtp_threshold)
+
+    fig, axes = plt.subplots(2, 2, figsize=(14, 10))
+
+    x = np.arange(100, results.n_iterations + 1)
+
+    # Running ICER mean
+    ax1 = axes[0, 0]
+    valid_icer = ~np.isnan(convergence['running_icer_mean'])
+    ax1.plot(x[valid_icer], convergence['running_icer_mean'][valid_icer],
+             'b-', linewidth=1.5)
+    ax1.axhline(y=wtp_threshold, color='r', linestyle='--', label=f'WTP ${wtp_threshold:,.0f}')
+    ax1.set_xlabel('Number of Iterations')
+    ax1.set_ylabel('Running Mean ICER ($)')
+    ax1.set_title('Running Mean ICER')
+    ax1.legend()
+
+    # Running P(CE)
+    ax2 = axes[0, 1]
+    ax2.plot(x, convergence['running_prob_ce'], 'g-', linewidth=1.5)
+    ax2.axhline(y=0.5, color='gray', linestyle='--', alpha=0.5)
+    ax2.set_xlabel('Number of Iterations')
+    ax2.set_ylabel('Running P(Cost-Effective)')
+    ax2.set_title(f'Running Probability Cost-Effective (WTP=${wtp_threshold:,.0f})')
+    ax2.set_ylim(0, 1)
+
+    # Running INB mean
+    ax3 = axes[1, 0]
+    ax3.plot(x, np.array(convergence['running_inb_mean']) / 1000, 'purple', linewidth=1.5)
+    ax3.axhline(y=0, color='gray', linestyle='--', alpha=0.5)
+    ax3.set_xlabel('Number of Iterations')
+    ax3.set_ylabel('Running Mean INB ($1,000)')
+    ax3.set_title('Running Mean Incremental Net Benefit')
+
+    # Text summary
+    ax4 = axes[1, 1]
+    ax4.axis('off')
+    summary_text = f"""
+    Convergence Assessment
+    ----------------------
+    Iterations: {results.n_iterations:,}
+    WTP Threshold: ${wtp_threshold:,}/QALY
+
+    Coefficient of Variation (last 20%):
+      P(CE): {convergence['prob_ce_cv']:.4f}
+      INB: {convergence['inb_cv']:.4f}
+
+    Convergence Status:
+      P(CE): {'Converged' if convergence['prob_ce_converged'] else 'Not converged'}
+      INB: {'Converged' if convergence['inb_converged'] else 'Not converged'}
+
+    {convergence['recommendation']}
+    """
+    ax4.text(0.1, 0.9, summary_text, transform=ax4.transAxes,
+             fontsize=11, verticalalignment='top', fontfamily='monospace')
+
+    plt.suptitle('PSA Convergence Diagnostics', fontsize=14, fontweight='bold')
     plt.tight_layout()
     return fig

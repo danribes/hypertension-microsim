@@ -4,14 +4,36 @@ Patient class for hypertension microsimulation model.
 This module defines the Patient class that tracks individual-level
 attributes throughout the simulation, including demographics, clinical
 parameters, treatment state, and event history.
+
+Deprecation Notes:
+    - CardiacState.ACUTE_STROKE is deprecated; use ACUTE_ISCHEMIC_STROKE
+      or ACUTE_HEMORRHAGIC_STROKE instead.
+    - Legacy stroke handling is maintained for backward compatibility
+      but will be removed in a future version.
 """
 
 from dataclasses import dataclass, field
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, TYPE_CHECKING
 from enum import Enum
+import warnings
 
 from .risk_assessment import BaselineRiskProfile
+from .risks.kfre import KFRECalculator
 import numpy as np
+
+
+def _warn_deprecated_stroke_state():
+    """Issue deprecation warning for legacy ACUTE_STROKE usage."""
+    warnings.warn(
+        "CardiacState.ACUTE_STROKE is deprecated. Use ACUTE_ISCHEMIC_STROKE "
+        "or ACUTE_HEMORRHAGIC_STROKE instead. Legacy support will be removed "
+        "in version 2.0.",
+        DeprecationWarning,
+        stacklevel=3
+    )
+
+# Singleton KFRE calculator for efficiency (stateless)
+_KFRE_CALCULATOR = KFRECalculator()
 
 
 class Sex(Enum):
@@ -36,6 +58,7 @@ class CardiacState(Enum):
     ACUTE_HF = "acute_hf"        # Acute decompensated HF
     CHRONIC_HF = "chronic_hf"    # Stable HF
     CV_DEATH = "cv_death"
+    NON_CV_DEATH = "non_cv_death"  # Death from non-cardiovascular causes
 
 
 class RenalState(Enum):
@@ -117,9 +140,35 @@ class Patient:
     has_atrial_fibrillation: bool = False
     has_peripheral_artery_disease: bool = False
 
-    # Resistant Hypertension Specific
-    has_primary_aldosteronism: bool = False  # 15-20% prevalence in resistant HTN
-    years_uncontrolled_htn: float = 0.0  # Duration of uncontrolled hypertension
+    # ==========================================================================
+    # Secondary Causes of Resistant Hypertension
+    # ==========================================================================
+    # These underlying conditions affect both risk and treatment response.
+    # Identifying etiology is critical for optimizing therapy selection.
+    #
+    # Reference: Carey RM et al. Resistant Hypertension. Hypertension 2018.
+    # ==========================================================================
+
+    # Primary Aldosteronism (PA) - 15-20% prevalence
+    # Best target for aldosterone-targeting therapies (IXA-001, spironolactone)
+    has_primary_aldosteronism: bool = False
+
+    # Renal Artery Stenosis (RAS) - 5-15% prevalence
+    # Renovascular HTN with high ESRD risk
+    has_renal_artery_stenosis: bool = False
+
+    # Pheochromocytoma (Pheo) - 0.5-1% prevalence
+    # Catecholamine-driven; poor response to standard antihypertensives
+    has_pheochromocytoma: bool = False
+
+    # Obstructive Sleep Apnea (OSA) - 60-80% prevalence
+    # Can coexist with other secondary causes
+    has_obstructive_sleep_apnea: bool = False
+    osa_severity: Optional[str] = None  # "mild", "moderate", "severe"
+    on_cpap_therapy: bool = False
+
+    # Duration of uncontrolled hypertension (years)
+    years_uncontrolled_htn: float = 0.0
     
     # Comorbidity burden score
     charlson_score: int = 0  # Calculated at baseline
@@ -145,10 +194,12 @@ class Patient:
     true_mean_sbp: float = field(init=False) # Physiological/Home SBP (used for risk)
     white_coat_effect: float = 0.0 # Error term (Office - True)
 
-    # Option H: Safety Rules (Potassium)
+    # Option H: Enhanced Hyperkalemia Management
     serum_potassium: float = 4.2  # mmol/L (Normal range 3.5-5.0)
-    has_hyperkalemia: bool = False # K+ > 5.5
+    has_hyperkalemia: bool = False  # K+ > 5.5
     hyperkalemia_history: int = 0  # Count of episodes
+    on_potassium_binder: bool = False  # Whether on patiromer/sodium zirconium
+    mra_dose_reduced: bool = False  # Whether MRA dose has been reduced
 
     # Event history
     prior_mi_count: int = 0
@@ -187,6 +238,11 @@ class Patient:
     
     # Baseline risk profile (for stratification and subgroup analysis)
     baseline_risk_profile: BaselineRiskProfile = field(default_factory=BaselineRiskProfile)
+
+    # KFRE model configuration (Issue #2 fix)
+    # When True, uses KFRE-informed eGFR decline rates instead of simple linear model
+    # Reference: Tangri N et al. JAMA 2011;305(15):1553-1559
+    use_kfre_model: bool = True
     
     def __post_init__(self):
         """Initialize current BP from baseline if not set."""
@@ -194,17 +250,38 @@ class Patient:
             self.current_sbp = self.baseline_sbp
         if self.current_dbp == 0:
             self.current_dbp = self.baseline_dbp
-            
+
         # Initialize True SBP
         # If created manually without effect, assume Office = True
         self.true_mean_sbp = self.current_sbp - self.white_coat_effect
+
+        # Validate inputs
+        self._validate()
+
+    def _validate(self):
+        """Validate patient parameters are within physiological ranges."""
+        # Age validation
+        if not 18 <= self.age <= 120:
+            warnings.warn(f"Age {self.age} outside typical range [18-120]")
+
+        # BP validation
+        if not 60 <= self.baseline_sbp <= 250:
+            warnings.warn(f"SBP {self.baseline_sbp} outside typical range [60-250]")
+
+        # eGFR validation
+        if not 5 <= self.egfr <= 150:
+            warnings.warn(f"eGFR {self.egfr} outside typical range [5-150]")
+
+        # Cholesterol validation
+        if self.total_cholesterol < self.hdl_cholesterol:
+            warnings.warn("Total cholesterol less than HDL cholesterol")
     
     @property
     def is_alive(self) -> bool:
         """Check if patient is alive."""
-        return (self.cardiac_state != CardiacState.CV_DEATH and 
-                self.renal_state != RenalState.RENAL_DEATH and
-                self.cardiac_state != "non_cv_death")  # Handled via flag or state
+        return (self.cardiac_state != CardiacState.CV_DEATH and
+                self.cardiac_state != CardiacState.NON_CV_DEATH and
+                self.renal_state != RenalState.RENAL_DEATH)
     
     @property
     def is_bp_controlled(self) -> bool:
@@ -290,6 +367,7 @@ class Patient:
             self.prior_hemorrhagic_stroke_count += 1
             self.time_since_last_cv_event = 0
         elif new_state == CardiacState.ACUTE_STROKE:  # Legacy support
+            _warn_deprecated_stroke_state()
             self.prior_stroke_count += 1
             self.time_since_last_cv_event = 0
         elif new_state == CardiacState.TIA:
@@ -346,47 +424,76 @@ class Patient:
         
     def _update_egfr(self, months: float):
         """
-        Update eGFR with age-stratified decline and BP/diabetes effects.
-        
-        Based on:
-        - MDRD/CKD-EPI natural decline rates
-        - Continuous SBP effect (Bakris et al.)
-        - Diabetes acceleration (UKPDS)
-        
+        Update eGFR with validated decline model.
+
+        When use_kfre_model=True (default), uses KFRE-informed decline rates
+        that stratify progression based on 2-year kidney failure risk.
+
+        When use_kfre_model=False, uses legacy age-stratified linear model.
+
+        KFRE Model Reference:
+            Tangri N, Stevens LA, Griffith J, et al. A predictive model for
+            progression of chronic kidney disease to kidney failure.
+            JAMA. 2011;305(15):1553-1559.
+
         Args:
             months: Number of months to advance
         """
-        # Base decline by age (mL/min/1.73m² per year)
-        if self.age < 40:
-            base_decline = 0.0
-        elif self.age < 65:
-            base_decline = 1.0  # Normal aging
+        if self.use_kfre_model:
+            # Use KFRE-informed decline rates (Issue #2 fix)
+            # The KFRECalculator handles:
+            # - KFRE 2-year risk stratification (for eGFR < 60)
+            # - Age-based natural decline (for eGFR >= 60)
+            # - Albuminuria effect
+            # - Diabetes multiplier (1.5x from UKPDS)
+            # - SGLT2i protection (0.61x from DAPA-CKD)
+            # - SBP excess effect (SPRINT CKD subgroup)
+            sex_str = self.sex.value if hasattr(self.sex, 'value') else str(self.sex)
+
+            total_annual_decline = _KFRE_CALCULATOR.get_annual_egfr_decline(
+                age=self.age,
+                sex=sex_str,
+                current_egfr=self.egfr,
+                uacr=self.uacr,
+                has_diabetes=self.has_diabetes,
+                on_sglt2i=self.on_sglt2_inhibitor,
+                sbp=self.current_sbp
+            )
+
+            # Apply baseline risk phenotype modifier for ESRD/renal progression
+            # Key impact: EOCRI-B (Silent Renal) has 2.0x ESRD risk despite low CV risk
+            esrd_phenotype_mod = self.baseline_risk_profile.get_dynamic_modifier("ESRD")
+            total_annual_decline *= esrd_phenotype_mod
         else:
-            base_decline = 1.5  # Accelerated in elderly
-        
-        # SBP effect: Each mmHg > 140 accelerates decline
-        sbp_excess = max(0, self.current_sbp - 140)
-        sbp_decline = 0.05 * sbp_excess  # 0.05 mL/min/year per mmHg
-        
-        # Diabetes multiplier (1.5x faster progression)
-        dm_multiplier = 1.5 if self.has_diabetes else 1.0
-        
-        # SGLT2 Inhibitor Protection (DAPA-CKD / EMPA-KIDNEY data)
-        # Reduces rate of decline by ~40% (HR ~0.60 for progression)
-        sglt2_multiplier = 0.60 if self.on_sglt2_inhibitor else 1.0
+            # Legacy model: simple age-stratified decline
+            # Base decline by age (mL/min/1.73m² per year)
+            if self.age < 40:
+                base_decline = 0.0
+            elif self.age < 65:
+                base_decline = 1.0  # Normal aging
+            else:
+                base_decline = 1.5  # Accelerated in elderly
 
-        # Baseline risk phenotype modifier for ESRD/renal progression
-        # This allows GCUA, EOCRI, and KDIGO phenotypes to influence decline rate
-        # Key impact: EOCRI-B (Silent Renal) has 2.0x ESRD risk despite low CV risk
-        esrd_phenotype_mod = self.baseline_risk_profile.get_dynamic_modifier("ESRD")
+            # SBP effect: Each mmHg > 140 accelerates decline
+            sbp_excess = max(0, self.current_sbp - 140)
+            sbp_decline = 0.05 * sbp_excess  # 0.05 mL/min/year per mmHg
 
-        # Total annual decline
-        total_annual_decline = (base_decline + sbp_decline) * dm_multiplier * sglt2_multiplier * esrd_phenotype_mod
-        
+            # Diabetes multiplier (1.5x faster progression)
+            dm_multiplier = 1.5 if self.has_diabetes else 1.0
+
+            # SGLT2 Inhibitor Protection (DAPA-CKD / EMPA-KIDNEY data)
+            sglt2_multiplier = 0.60 if self.on_sglt2_inhibitor else 1.0
+
+            # Baseline risk phenotype modifier
+            esrd_phenotype_mod = self.baseline_risk_profile.get_dynamic_modifier("ESRD")
+
+            # Total annual decline
+            total_annual_decline = (base_decline + sbp_decline) * dm_multiplier * sglt2_multiplier * esrd_phenotype_mod
+
         # Apply monthly decline
         monthly_decline = total_annual_decline * (months / 12.0)
         self.egfr = max(5, self.egfr - monthly_decline)
-        
+
         # Update Serum Potassium (Option H)
         self._update_potassium(months)
             
@@ -467,6 +574,25 @@ class Patient:
             "cumulative_costs": self.cumulative_costs,
             "cumulative_qalys": self.cumulative_qalys
         }
+
+    @property
+    def summary(self) -> str:
+        """Return a brief summary string for debugging."""
+        status = "alive" if self.is_alive else "deceased"
+        bp_status = "controlled" if self.is_bp_controlled else "uncontrolled"
+        return (
+            f"Patient {self.patient_id}: {self.age:.0f}yo {self.sex.value}, "
+            f"SBP={self.current_sbp:.0f}, eGFR={self.egfr:.0f}, "
+            f"{bp_status}, {status}"
+        )
+
+    def __repr__(self) -> str:
+        """Return string representation for debugging."""
+        return (
+            f"Patient(id={self.patient_id}, age={self.age:.1f}, "
+            f"sex={self.sex.value}, sbp={self.current_sbp:.0f}, "
+            f"cardiac={self.cardiac_state.value}, renal={self.renal_state.value})"
+        )
 
 
 def create_patient_from_params(

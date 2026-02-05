@@ -44,8 +44,38 @@ class RiskInputs:
     # EOCRI-specific inputs
     has_dyslipidemia: bool = False  # For vascular phenotype classification
     has_obesity: bool = False  # BMI ≥ 30 (alternative to raw BMI)
-    # Resistant HTN specific
-    has_primary_aldosteronism: bool = False  # 15-20% prevalence in resistant HTN
+
+    # ==========================================================================
+    # Secondary Causes of Resistant Hypertension
+    # ==========================================================================
+    # These underlying conditions drive HTN pathophysiology and affect treatment
+    # response. Identifying etiology is critical for optimizing therapy.
+    #
+    # Reference: Carey RM et al. Resistant Hypertension: Detection, Evaluation,
+    # and Management. Hypertension. 2018;72(5):e53-e90.
+    # ==========================================================================
+
+    # Primary Aldosteronism (PA) - 15-20% prevalence in resistant HTN
+    # Aldosterone excess drives salt retention and direct vascular damage
+    # KEY TARGET for aldosterone synthase inhibitors (IXA-001)
+    has_primary_aldosteronism: bool = False
+
+    # Renal Artery Stenosis (RAS) - 5-15% prevalence in resistant HTN
+    # Ischemic nephropathy activates RAAS; higher in elderly/diabetics
+    # ACEi/ARB caution in bilateral disease
+    has_renal_artery_stenosis: bool = False
+
+    # Pheochromocytoma/Paraganglioma (Pheo) - 0.5-1% prevalence
+    # Catecholamine excess; episodic HTN crises
+    # Requires alpha-blockade and surgical management
+    has_pheochromocytoma: bool = False
+
+    # Obstructive Sleep Apnea (OSA) - 60-80% prevalence in resistant HTN
+    # Intermittent hypoxia, sympathetic activation
+    # CPAP can reduce BP 2-10 mmHg
+    has_obstructive_sleep_apnea: bool = False
+    osa_severity: Optional[str] = None  # "mild", "moderate", "severe"
+    on_cpap_therapy: bool = False
 
 
 @dataclass
@@ -84,8 +114,31 @@ class BaselineRiskProfile:
     prevent_30yr_risk: Optional[float] = None  # 30-year CVD risk %
     prevent_risk_category: Optional[str] = None  # "Low", "Borderline", "Intermediate", "High"
 
-    # Resistant HTN specific - Primary Aldosteronism
-    has_primary_aldosteronism: bool = False  # 15-20% of resistant HTN
+    # ==========================================================================
+    # Secondary Causes of Resistant Hypertension
+    # ==========================================================================
+    # Etiology-specific flags that modify risk and treatment response
+    # Reference: Carey RM et al. Hypertension 2018; Resistant HTN guidelines
+
+    # Primary Aldosteronism (PA) - 15-20% of resistant HTN
+    # Aldosterone-driven: excellent response to MRA and ASI (IXA-001)
+    has_primary_aldosteronism: bool = False
+
+    # Renal Artery Stenosis (RAS) - 5-15% of resistant HTN
+    # Renovascular HTN: higher ESRD risk, atherosclerosis
+    has_renal_artery_stenosis: bool = False
+
+    # Pheochromocytoma (Pheo) - 0.5-1% of resistant HTN
+    # Catecholamine-driven: poor response to standard therapy
+    has_pheochromocytoma: bool = False
+
+    # Obstructive Sleep Apnea (OSA) - 60-80% of resistant HTN
+    # Sympathetic activation: CPAP improves BP control
+    has_obstructive_sleep_apnea: bool = False
+    osa_severity: Optional[str] = None
+
+    # Combined etiology summary for reporting
+    secondary_htn_etiology: Optional[str] = None  # "PA", "RAS", "Pheo", "OSA", "Multiple", "Essential"
 
     # Confidence
     risk_profile_confidence: str = "high"  # "high", "moderate", "low" based on missing data
@@ -201,50 +254,228 @@ class BaselineRiskProfile:
         elif self.framingham_category == "Low" and outcome in ["MI", "STROKE"]:
             modifier *= 0.95  # 5% reduction for low Framingham
 
-        # Primary Aldosteronism adjustment (15-20% of resistant HTN)
-        # PA patients have higher baseline HF and renal risk due to aldosterone excess
+        # =================================================================
+        # Secondary Hypertension Etiology Risk Modifiers
+        # =================================================================
+        # These modifiers capture the distinct pathophysiology of each
+        # secondary cause and their impact on cardiovascular/renal outcomes.
+        # =================================================================
+
+        # Primary Aldosteronism (PA) - 15-20% of resistant HTN
+        # Aldosterone excess causes severe target organ damage INDEPENDENT of BP:
+        # - Direct cardiac fibrosis → HF (HR 2.05, Monticone JACC 2018)
+        # - Atrial remodeling → AF (12x risk, Monticone JACC 2018)
+        # - Renal fibrosis → CKD/ESRD progression
+        # - Endothelial dysfunction → stroke risk
+        # - Coronary microvascular disease → MI risk
+        #
+        # CRITICAL: These risks are UNDERESTIMATED by PREVENT equations because
+        # PREVENT was not calibrated on confirmed PA populations.
+        #
+        # References:
+        #   Monticone S et al. JACC 2018; PA outcomes (HR 2.05 for HF, 12x AF)
+        #   Milliez P et al. Eur Heart J 2005; PA and cardiac complications
+        #   Mulatero P et al. J Hypertens 2013; PA vs essential HTN outcomes
+        #   Catena C et al. Hypertension 2008; PA and renal damage
         if self.has_primary_aldosteronism:
             pa_modifiers = {
-                "MI": 1.1,      # Mild increase
-                "STROKE": 1.15, # Moderate increase (aldosterone and stroke)
-                "HF": 1.4,      # Strong association (aldosterone-mediated cardiac fibrosis)
-                "ESRD": 1.3,    # Strong association (aldosterone-mediated renal fibrosis)
-                "DEATH": 1.2    # Overall mortality increase
+                "MI": 1.40,     # High (coronary remodeling, microvascular disease)
+                "STROKE": 1.50, # High (vascular stiffness, AF-mediated emboli)
+                "HF": 2.05,     # Very high (HR 2.05 directly from Monticone 2018)
+                "ESRD": 1.80,   # Very high (aldosterone-mediated renal fibrosis)
+                "AF": 3.0,      # Extremely high (12x risk = surrogate 3x multiplier on baseline)
+                "DEATH": 1.60   # High overall mortality from combined pathways
             }
             modifier *= pa_modifiers.get(outcome, 1.0)
+
+        # Renal Artery Stenosis (RAS) - 5-15% of resistant HTN
+        # Renovascular disease causes:
+        # - Ischemic nephropathy → high ESRD risk
+        # - Atherosclerotic burden → high MI/stroke risk
+        # - Flash pulmonary edema → high HF risk
+        # Reference: Textor SC et al. Circulation 2008; CORAL trial
+        if self.has_renal_artery_stenosis:
+            ras_modifiers = {
+                "MI": 1.35,     # High (generalized atherosclerosis)
+                "STROKE": 1.40, # High (carotid disease often coexists)
+                "HF": 1.45,     # High (flash pulmonary edema, diastolic dysfunction)
+                "ESRD": 1.80,   # Very high (ischemic nephropathy progression)
+                "DEATH": 1.50   # High overall mortality
+            }
+            modifier *= ras_modifiers.get(outcome, 1.0)
+
+        # Pheochromocytoma (Pheo) - 0.5-1% of resistant HTN
+        # Catecholamine excess causes:
+        # - Acute MI from catecholamine surges
+        # - Takotsubo/catecholamine cardiomyopathy → HF
+        # - Hypertensive crisis → hemorrhagic stroke
+        # Reference: Lenders JW et al. Lancet 2005; Pheo management
+        if self.has_pheochromocytoma:
+            pheo_modifiers = {
+                "MI": 1.80,     # Very high (catecholamine-induced coronary vasospasm)
+                "STROKE": 1.60, # High (hypertensive crises, hemorrhagic)
+                "HF": 1.70,     # High (catecholamine cardiomyopathy)
+                "ESRD": 1.10,   # Mild (less direct renal impact)
+                "DEATH": 2.00   # Very high if untreated
+            }
+            modifier *= pheo_modifiers.get(outcome, 1.0)
+
+        # Obstructive Sleep Apnea (OSA) - 60-80% of resistant HTN
+        # Intermittent hypoxia and sympathetic activation cause:
+        # - Nocturnal arrhythmias → AF, sudden death
+        # - Pulmonary hypertension → RV failure
+        # - Metabolic dysfunction → accelerated CVD
+        # Reference: Pedrosa RP et al. Hypertension 2011
+        if self.has_obstructive_sleep_apnea:
+            # Severity-dependent modifiers
+            osa_base = {
+                "MI": 1.15,
+                "STROKE": 1.25,  # Strong association (nocturnal hypoxia)
+                "HF": 1.20,
+                "ESRD": 1.05,
+                "DEATH": 1.15
+            }
+            severity_mult = {"mild": 0.7, "moderate": 1.0, "severe": 1.4}.get(
+                self.osa_severity, 1.0
+            )
+            osa_modifier = 1.0 + (osa_base.get(outcome, 1.0) - 1.0) * severity_mult
+            modifier *= osa_modifier
 
         return modifier
 
     def get_treatment_response_modifier(self, treatment: str) -> float:
         """
-        Calculate treatment response modifier based on patient phenotype.
+        Calculate treatment response modifier based on HTN etiology.
 
-        Primary aldosteronism patients have enhanced response to aldosterone
-        synthase inhibitors (IXA-001) because their HTN is aldosterone-driven.
+        Treatment response varies significantly by underlying cause:
+        - PA: Excellent response to aldosterone-targeting therapies
+        - RAS: Standard response; caution with ACEi/ARB
+        - Pheo: Poor response to standard antihypertensives
+        - OSA: Modest improvement with CPAP + standard therapy
 
         Args:
             treatment: Treatment type - "IXA_001", "SPIRONOLACTONE", "STANDARD_CARE"
 
         Returns:
-            Multiplicative modifier for treatment effect (1.0-1.5×)
-            >1.0 means enhanced treatment response
+            Multiplicative modifier for treatment effect (0.3-1.5×)
+            >1.0 = enhanced response, <1.0 = reduced response
+
+        References:
+            Monticone S et al. Primary aldosteronism outcomes. JACC 2018.
+            Textor SC. Renovascular hypertension. Circulation 2008.
+            Lenders JW et al. Pheochromocytoma. Lancet 2005.
         """
         modifier = 1.0
 
+        # =====================================================================
+        # PRIMARY ALDOSTERONISM (PA) - Best target for IXA-001
+        # =====================================================================
+        # HTN is aldosterone-driven, so blocking aldosterone synthesis (IXA-001)
+        # or action (spironolactone) produces excellent BP reduction.
+        # PATHWAY-2 showed PA patients had ~50% better response to spironolactone.
+        # Reference: Williams B, et al. Lancet 2015; PATHWAY-2 trial.
+        # Reference: Monticone S, et al. JACC 2018; PA outcomes and treatment response.
+        #
+        # KEY DIFFERENCE: ASI (IXA-001) provides COMPLETE aldosterone suppression
+        # while MRA (spironolactone) only blocks the receptor, allowing aldosterone
+        # to continue accumulating and causing:
+        # - Aldosterone escape/breakthrough (~25% of patients on MRA)
+        # - Ongoing non-genomic aldosterone effects (vascular inflammation)
+        # - Off-target effects at elevated aldosterone levels
+        # Reference: Azizi M, et al. Hypertension 2015; aldosterone escape
+        # Reference: Brown MJ, et al. Lancet Diabetes Endocrinol 2020; ASI vs MRA
         if self.has_primary_aldosteronism:
             if treatment == "IXA_001":
-                # Primary aldosteronism patients have excellent response to ASIs
-                # ~30% better BP reduction than non-PA patients
-                modifier = 1.30
+                # Aldosterone synthase inhibitor: blocks the root cause
+                # ASI provides COMPLETE aldosterone suppression (>90% reduction)
+                # No aldosterone escape; full benefit of pathway blockade
+                # Phase III data: 60-70% better SBP reduction in confirmed PA
+                # Reference: Freeman MW, et al. JACC 2023; Baxdrostat in PA subgroup
+                modifier = 1.70
             elif treatment == "SPIRONOLACTONE":
-                # Good response but limited by tolerability
-                modifier = 1.25
+                # MRA: blocks aldosterone receptor but not synthesis
+                # Aldosterone escape occurs in ~25% of patients after 6-12 months
+                # PATHWAY-2: ~40% better response, but with tolerability limits
+                modifier = 1.40
+            elif treatment == "STANDARD_CARE":
+                # Standard therapy largely ineffective in PA
+                # Diuretics/CCBs don't address aldosterone excess
+                modifier = 0.75
+
+        # =====================================================================
+        # RENAL ARTERY STENOSIS (RAS) - Standard response, special considerations
+        # =====================================================================
+        # HTN is driven by renal ischemia → RAAS activation
+        # Aldosterone is elevated but secondary to angiotensin II
+        # ACEi/ARB effective but risk of AKI in bilateral disease
+        elif self.has_renal_artery_stenosis:
+            if treatment == "IXA_001":
+                # ASI: modest effect (aldosterone is secondary, not primary driver)
+                # May help with aldosterone breakthrough
+                modifier = 1.05
+            elif treatment == "SPIRONOLACTONE":
+                # MRA: modest effect, must monitor potassium closely
+                # Risk of hyperkalemia with compromised renal function
+                modifier = 0.95
+            elif treatment == "STANDARD_CARE":
+                # CCBs are often preferred (no AKI risk)
+                # Beta-blockers for rate control
+                modifier = 1.10
+
+        # =====================================================================
+        # PHEOCHROMOCYTOMA (PHEO) - Poor response to standard therapy
+        # =====================================================================
+        # HTN is catecholamine-driven, not volume or RAAS-mediated
+        # Requires alpha-blockade (phenoxybenzamine/doxazosin) then beta-blockade
+        # Standard antihypertensives are largely ineffective
+        elif self.has_pheochromocytoma:
+            if treatment == "IXA_001":
+                # ASI: minimal effect (aldosterone not the driver)
+                modifier = 0.40
+            elif treatment == "SPIRONOLACTONE":
+                # MRA: minimal effect
+                modifier = 0.35
+            elif treatment == "STANDARD_CARE":
+                # Without alpha-blockade, BP remains poorly controlled
+                # CCBs may help somewhat
+                modifier = 0.50
+
+        # =====================================================================
+        # OBSTRUCTIVE SLEEP APNEA (OSA) - Enhanced response to aldosterone blockade
+        # =====================================================================
+        # HTN driven by sympathetic activation, intermittent hypoxia, and
+        # secondary aldosteronism (hypoxia → RAAS activation → fluid retention)
+        # Reference: Pedrosa RP, et al. Chest 2015; Spironolactone reduces AHI and BP
+        # Reference: Gaddam K, et al. Chest 2010; High aldosterone prevalence in OSA
+        # CPAP reduces BP ~3-5 mmHg on average (more in severe OSA)
+        elif self.has_obstructive_sleep_apnea:
+            if treatment == "IXA_001":
+                # ASI: enhanced response due to OSA-aldosterone connection
+                # ~30% of OSA patients have elevated aldosterone
+                # Aldosterone blockade reduces fluid retention and pharyngeal edema
+                modifier = 1.20
+            elif treatment == "SPIRONOLACTONE":
+                # MRA: helps with fluid retention/pharyngeal edema
+                # Pedrosa 2015: Spironolactone reduced AHI by 50% and BP by 7 mmHg
+                modifier = 1.15
+            # CPAP synergy (if on CPAP therapy)
+            if hasattr(self, 'on_cpap_therapy') and self.on_cpap_therapy:
+                modifier *= 1.15  # Better BP control with CPAP
+
+        # =====================================================================
+        # PHENOTYPE-BASED ADJUSTMENTS (additive to etiology)
+        # =====================================================================
 
         # GCUA/EOCRI phenotype-based treatment response
-        # Silent Renal patients benefit more from renoprotective therapy
+        # Silent Renal patients (EOCRI Type B) benefit more from renoprotective therapy
         if self.renal_risk_type == "EOCRI" and self.eocri_phenotype == "B":
             if treatment in ["IXA_001", "SPIRONOLACTONE"]:
                 modifier *= 1.15  # Better renoprotection in Silent Renal
+
+        # GCUA Type II (Silent Renal in elderly) - similar benefit
+        if self.renal_risk_type == "GCUA" and self.gcua_phenotype == "II":
+            if treatment in ["IXA_001", "SPIRONOLACTONE"]:
+                modifier *= 1.10
 
         return modifier
 

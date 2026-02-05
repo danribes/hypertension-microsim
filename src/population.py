@@ -221,16 +221,92 @@ class PopulationGenerator:
         # Resistant Hypertension Specific Attributes
         # ============================================
 
-        # Primary Aldosteronism (15-20% prevalence in resistant HTN)
-        # Higher prevalence in patients with more severe HTN and obesity
-        # Key target population for aldosterone synthase inhibitors (IXA-001)
-        pa_base_prevalence = 0.17  # 17% baseline
-        pa_prevalence = pa_base_prevalence * (
-            1 + 0.2 * (sbps > 160)  # More severe HTN increases PA probability
-            + 0.15 * (bmis >= 30)   # Obesity associated with PA
-        )
-        pa_prevalence = pa_prevalence.clip(0.10, 0.25)
-        has_primary_aldosteronism = self.rng.binomial(1, pa_prevalence, n).astype(bool)
+        # =================================================================
+        # SECONDARY CAUSES OF RESISTANT HYPERTENSION
+        # =================================================================
+        # These etiologies are mutually exclusive for simplicity (a patient
+        # has one primary driver). In reality, overlap can occur (e.g., PA + OSA).
+        #
+        # References:
+        #   Carey RM et al. Resistant Hypertension. Hypertension 2018.
+        #   Calhoun DA et al. Resistant HTN prevalence. Circulation 2008.
+        #   Rimoldi SF et al. Secondary HTN workup. Eur Heart J 2014.
+        # =================================================================
+
+        # Initialize arrays
+        has_primary_aldosteronism = np.zeros(n, dtype=bool)
+        has_renal_artery_stenosis = np.zeros(n, dtype=bool)
+        has_pheochromocytoma = np.zeros(n, dtype=bool)
+        has_obstructive_sleep_apnea = np.zeros(n, dtype=bool)
+        osa_severity = [None] * n
+        on_cpap_therapy = np.zeros(n, dtype=bool)
+
+        for i in range(n):
+            # Roll for secondary cause (mutually exclusive primary driver)
+            roll = self.rng.random()
+
+            # Primary Aldosteronism (PA) - 15-20% prevalence
+            # Higher in: severe HTN (SBP>160), obesity, hypokalemia
+            pa_prob = 0.17 * (
+                1 + 0.25 * (sbps[i] > 160) +
+                0.20 * (bmis[i] >= 30)
+            )
+            pa_prob = min(pa_prob, 0.25)
+
+            # Renal Artery Stenosis (RAS) - 5-15% prevalence
+            # Higher in: elderly (>65), diabetics, smokers, known atherosclerosis
+            ras_prob = 0.08 * (
+                1 + 0.40 * (ages[i] > 65) +
+                0.30 * has_diabetes[i] +
+                0.25 * is_smoker[i] +
+                0.20 * (prior_mi[i] or has_pad[i])  # Atherosclerotic burden
+            )
+            ras_prob = min(ras_prob, 0.18)
+
+            # Pheochromocytoma (Pheo) - 0.5-1% prevalence
+            # Rare, but important to identify
+            # Higher suspicion: episodic symptoms, younger patients with severe HTN
+            pheo_prob = 0.007 * (
+                1 + 0.50 * (ages[i] < 50) +  # More common in younger patients
+                0.30 * (sbps[i] > 170)       # Very severe HTN
+            )
+            pheo_prob = min(pheo_prob, 0.015)
+
+            # Assign mutually exclusive primary etiology
+            cumulative = 0
+            if roll < (cumulative := cumulative + pheo_prob):
+                has_pheochromocytoma[i] = True
+            elif roll < (cumulative := cumulative + pa_prob):
+                has_primary_aldosteronism[i] = True
+            elif roll < (cumulative := cumulative + ras_prob):
+                has_renal_artery_stenosis[i] = True
+            # Else: Essential/primary resistant HTN (no identified secondary cause)
+
+        # Obstructive Sleep Apnea (OSA) - 60-80% prevalence
+        # Can COEXIST with other secondary causes (not mutually exclusive)
+        # Higher in: obesity, male sex, older age
+        for i in range(n):
+            osa_prob = 0.65 * (
+                1 + 0.25 * (bmis[i] >= 30) +
+                0.15 * (bmis[i] >= 35) +
+                0.10 * (sexes[i] == 1) +  # Male
+                0.10 * (ages[i] > 50)
+            )
+            osa_prob = min(osa_prob, 0.85)
+
+            if self.rng.random() < osa_prob:
+                has_obstructive_sleep_apnea[i] = True
+                # Severity distribution: 30% mild, 40% moderate, 30% severe
+                sev_roll = self.rng.random()
+                if sev_roll < 0.30:
+                    osa_severity[i] = "mild"
+                elif sev_roll < 0.70:
+                    osa_severity[i] = "moderate"
+                else:
+                    osa_severity[i] = "severe"
+                # CPAP adherence: ~50% of diagnosed OSA patients
+                if self.rng.random() < 0.50:
+                    on_cpap_therapy[i] = True
 
         # Years of uncontrolled hypertension (proxy from age and disease duration)
         # Resistant HTN patients have typically been uncontrolled for 3-10 years
@@ -362,7 +438,14 @@ class PopulationGenerator:
                 nocturnal_sbp=nocturnal_sbps[i],
                 # EOCRI-specific inputs
                 has_dyslipidemia=has_dyslipidemia[i],
-                has_obesity=(bmis[i] >= 30)
+                has_obesity=(bmis[i] >= 30),
+                # Secondary causes of resistant HTN
+                has_primary_aldosteronism=has_primary_aldosteronism[i],
+                has_renal_artery_stenosis=has_renal_artery_stenosis[i],
+                has_pheochromocytoma=has_pheochromocytoma[i],
+                has_obstructive_sleep_apnea=has_obstructive_sleep_apnea[i],
+                osa_severity=osa_severity[i],
+                on_cpap_therapy=on_cpap_therapy[i]
             )
 
             baseline_risk = BaselineRiskProfile()
@@ -423,8 +506,26 @@ class PopulationGenerator:
             baseline_risk.framingham_risk = fram['risk']
             baseline_risk.framingham_category = fram['category']
 
-            # Primary aldosteronism (resistant HTN specific)
+            # =================================================================
+            # Secondary Causes of Resistant Hypertension
+            # =================================================================
             baseline_risk.has_primary_aldosteronism = has_primary_aldosteronism[i]
+            baseline_risk.has_renal_artery_stenosis = has_renal_artery_stenosis[i]
+            baseline_risk.has_pheochromocytoma = has_pheochromocytoma[i]
+            baseline_risk.has_obstructive_sleep_apnea = has_obstructive_sleep_apnea[i]
+            baseline_risk.osa_severity = osa_severity[i]
+
+            # Determine primary etiology for reporting
+            if has_pheochromocytoma[i]:
+                baseline_risk.secondary_htn_etiology = "Pheo"
+            elif has_primary_aldosteronism[i]:
+                baseline_risk.secondary_htn_etiology = "PA"
+            elif has_renal_artery_stenosis[i]:
+                baseline_risk.secondary_htn_etiology = "RAS"
+            elif has_obstructive_sleep_apnea[i] and osa_severity[i] == "severe":
+                baseline_risk.secondary_htn_etiology = "OSA"
+            else:
+                baseline_risk.secondary_htn_etiology = "Essential"
             
             # Calculate Charlson score at baseline
             charlson = self._calculate_charlson_score(
@@ -470,8 +571,13 @@ class PopulationGenerator:
                 # Additional CV risk factors
                 has_atrial_fibrillation=has_afib[i],
                 has_peripheral_artery_disease=has_pad[i],
-                # Resistant HTN specific
+                # Secondary causes of resistant HTN
                 has_primary_aldosteronism=has_primary_aldosteronism[i],
+                has_renal_artery_stenosis=has_renal_artery_stenosis[i],
+                has_pheochromocytoma=has_pheochromocytoma[i],
+                has_obstructive_sleep_apnea=has_obstructive_sleep_apnea[i],
+                osa_severity=osa_severity[i],
+                on_cpap_therapy=on_cpap_therapy[i],
                 years_uncontrolled_htn=years_uncontrolled[i],
                 # Comorbidity burden
                 charlson_score=charlson,
