@@ -706,7 +706,7 @@ add_title_slide(
 )
 
 # Save presentation
-output_path = "/home/dan/Genesis Interview/hypertension_microsim/IXA-001_CEA_Presentation.pptx"
+output_path = "IXA-001_CEA_Presentation.pptx"
 prs.save(output_path)
 print(f"Presentation saved to: {output_path}")
 print(f"Total slides: {len(prs.slides)}")

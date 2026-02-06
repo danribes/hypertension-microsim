@@ -220,7 +220,7 @@ Step 4: Calculate relative benefit
 
 ## Coherence with RFP Requirements
 
-### Original RFP Specifications (Atlantis/Genesis)
+### Original RFP Specifications (Atlantis Pharmaceuticals)
 
 | Requirement | RFP Specification | Model Implementation | Status |
 |-------------|-------------------|----------------------|--------|

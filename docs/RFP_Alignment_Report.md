@@ -4,7 +4,7 @@
 
 **Document Version:** 1.0
 **Date:** February 2026
-**Prepared for:** Genesis Research Group Interview Assessment
+**Prepared for:** Atlantis Pharmaceuticals Interview Assessment
 
 ---
 
@@ -312,7 +312,7 @@ The BIM uses avoided event costs derived from the CEA microsimulation:
 ### 5.1 File Structure
 
 ```
-Genesis Interview/
+projects/
 ├── hypertension_microsim/          # Cost-Effectiveness Model
 │   ├── src/
 │   │   ├── simulation.py           # Core engine

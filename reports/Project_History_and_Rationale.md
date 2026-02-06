@@ -363,7 +363,7 @@ Ran `tests/test_safety.py`:
 ## File: gap_analysis.md
 
 # Model Requirements Gap Analysis
-## Hypertension Microsimulation Model - Genesis Interview Assessment
+## Hypertension Microsimulation Model - Atlantis Pharmaceuticals Assessment
 
 **Date:** February 3, 2026  
 **Analysis Source:** Technical Report Specifications + Implementation Review  
@@ -389,7 +389,7 @@ The hypertension microsimulation model has been **successfully implemented** wit
 
 | Requirement | Status | Implementation |
 |-------------|--------|----------------|
-| Individual-Level State-Transition Model | ✅ | [`patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py) - Patient dataclass |
+| Individual-Level State-Transition Model | ✅ | [`patient.py`](./src/patient.py) - Patient dataclass |
 | Memory of patient history | ✅ | `event_history` field + `PatientHistoryAnalyzer` |
 | Heterogeneous patient profiles | ✅ | Population generator with correlated sampling |
 | Continuous variable tracking | ✅ | exact_sbp, eGFR values (not discretized) |
@@ -2188,7 +2188,7 @@ The implementation demonstrates strong alignment with the technical report's spe
 - Heterogeneous patient profiles
 - Continuous variable tracking (eGFR, SBP)
 
-### Implementation ([`patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py))
+### Implementation ([`patient.py`](./src/patient.py))
 ```python
 @dataclass
 class Patient:
@@ -2220,7 +2220,7 @@ class Patient:
 - **Cycle Length:** Monthly
 - **Horizon:** Lifetime (captures full progression to ESRD and CV mortality)
 
-### Implementation ([`simulation.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/simulation.py#L24))
+### Implementation ([`simulation.py`](./src/simulation.py#L24))
 ```python
 @dataclass
 class SimulationConfig:
@@ -2241,7 +2241,7 @@ class SimulationConfig:
 - Acute MACE (MI, Stroke)
 - Post-Event (Chronic)
 
-#### Implementation ([`patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py#L20-L29))
+#### Implementation ([`patient.py`](./src/patient.py#L20-L29))
 ```python
 class CardiacState(Enum):
     NO_ACUTE_EVENT = "no_acute_event"
@@ -2266,7 +2266,7 @@ class CardiacState(Enum):
 - G4: eGFR 15-29
 - G5 (ESRD): eGFR < 15
 
-#### Implementation ([`patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py#L32-L38))
+#### Implementation ([`patient.py`](./src/patient.py#L32-L38))
 ```python
 class RenalState(Enum):
     CKD_STAGE_1_2 = "ckd_stage_1_2"  # eGFR >= 60
@@ -2292,7 +2292,7 @@ class RenalState(Enum):
 SBP(t+1) = SBP(t) + Δtreatment + ε
 ```
 
-#### Implementation ([`patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py#L150-L155))
+#### Implementation ([`patient.py`](./src/patient.py#L150-L155))
 ```python
 def apply_treatment_effect(self, treatment: Treatment, effect_mmhg: float):
     if self.is_adherent:
@@ -2327,7 +2327,7 @@ eGFR(t+1) = eGFR(t) - β_age - β_SBP × f(SBP_uncontrolled)
 ```
 Where β_SBP represents accelerated renal damage from uncontrolled SBP.
 
-#### Implementation ([`patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py#L204-L206))
+#### Implementation ([`patient.py`](./src/patient.py#L204-L206))
 ```python
 if self.age > 40:
     annual_decline = 1.0 + (0.5 if not self.is_bp_controlled else 0)
@@ -2372,7 +2372,7 @@ def update_egfr(self, months: float):
 - Mortality: background + excess from CKD/MACE
 - Monte Carlo sampling: `if random() < P(event)`
 
-### Implementation ([`transitions.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/transitions.py))
+### Implementation ([`transitions.py`](./src/transitions.py))
 
 **Risk Calculator:**
 ```python
@@ -2414,7 +2414,7 @@ def sample_event(self, patient: Patient, probs: TransitionProbabilities):
 - Acute hospitalization
 - Dialysis (high-cost therapy)
 
-#### Implementation ([`costs/costs.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/costs/costs.py))
+#### Implementation ([`costs/costs.py`](./src/costs/costs.py))
 ```python
 @dataclass
 class CostInputs:
@@ -2446,7 +2446,7 @@ QALY = ∫ Utility(t) dt
 ```
 With utility decrements for CKD stages and post-stroke/MI states.
 
-#### Implementation ([`utilities.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/utilities.py))
+#### Implementation ([`utilities.py`](./src/utilities.py))
 ```python
 DISUTILITY = {
     "post_mi": 0.12,
@@ -2476,7 +2476,7 @@ def calculate_monthly_qaly(patient, discount_rate):
 ICER = (Cost_new - Cost_comp) / (QALY_new - QALY_comp)
 ```
 
-#### Implementation ([`simulation.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/simulation.py#L230-L238))
+#### Implementation ([`simulation.py`](./src/simulation.py#L230-L238))
 ```python
 def calculate_icer(self):
     self.incremental_costs = self.intervention.mean_costs - self.comparator.mean_costs
@@ -2564,9 +2564,9 @@ Successfully implemented all three priority enhancements identified in the coher
 ### 1. ✅ CKD Stage 3 Subdivision (G3a/G3b)
 
 **Files Modified:**
-- [`src/patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py)
-- [`src/costs/costs.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/costs/costs.py)
-- [`src/utilities.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/utilities.py)
+- [`src/patient.py`](./src/patient.py)
+- [`src/costs/costs.py`](./src/costs/costs.py)
+- [`src/utilities.py`](./src/utilities.py)
 
 **Changes:**
 - Split `RenalState.CKD_STAGE_3` into `CKD_STAGE_3A` (eGFR 45-59) and `CKD_STAGE_3B` (eGFR 30-44)
@@ -2583,7 +2583,7 @@ Successfully implemented all three priority enhancements identified in the coher
 ### 2. ✅ Enhanced eGFR Decline Model
 
 **Files Modified:**
-- [`src/patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py#L203-L238)
+- [`src/patient.py`](./src/patient.py#L203-L238)
 
 **Changes:**
 Created new `_update_egfr()` method implementing:
@@ -2611,9 +2611,9 @@ total_decline = (base + sbp_decline) × (1.5 if diabetic else 1.0)
 ### 3. ✅ Dynamic SBP Update Equation
 
 **Files Modified:**
-- [`src/patient.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py#L157-L185) - Added `update_sbp()` method
-- [`src/treatment.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/treatment.py#L87-L97) - Added `get_monthly_effect()` method
-- [`src/simulation.py`](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/simulation.py#L153-L154) - Integrated into simulation loop
+- [`src/patient.py`](./src/patient.py#L157-L185) - Added `update_sbp()` method
+- [`src/treatment.py`](./src/treatment.py#L87-L97) - Added `get_monthly_effect()` method
+- [`src/simulation.py`](./src/simulation.py#L153-L154) - Integrated into simulation loop
 
 **Changes:**
 Implemented stochastic SBP dynamics:
@@ -2644,15 +2644,15 @@ All changes maintain existing code patterns:
 
 ---
 
-## render_diffs(file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py)
+## render_diffs(./src/patient.py)
 
-render_diffs(file:///home/dan/Genesis%20Interview/hypertension_microsim/src/costs/costs.py)
+render_diffs(./src/costs/costs.py)
 
-render_diffs(file:///home/dan/Genesis%20Interview/hypertension_microsim/src/utilities.py)
+render_diffs(./src/utilities.py)
 
-render_diffs(file:///home/dan/Genesis%20Interview/hypertension_microsim/src/treatment.py)
+render_diffs(./src/treatment.py)
 
-render_diffs(file:///home/dan/Genesis%20Interview/hypertension_microsim/src/simulation.py)
+render_diffs(./src/simulation.py)
 
 ---
 
@@ -2675,7 +2675,7 @@ pip install numpy pandas tqdm
 ### 2. Run Test Script
 
 ```bash
-cd /home/dan/Genesis\ Interview/hypertension_microsim
+cd .
 python3 test_enhancements.py
 ```
 
@@ -3198,7 +3198,7 @@ This enhancement provides **clinical interpretability** and supports **targeted 
 Based on deep-dive research using NotebookLM, I have identified three high-impact enhancements to the hypertension microsimulation model.
 
 ## 1. Digital Twin Mode (Hybrid Modeling)
-**Concept:** Instead of generating random synthetic patients, allow the model to instantiate a [Patient](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py#51-357) object from a "Digital Twin" stream—real-world or user-defined time-series data (e.g., 3 months of home BP readings).
+**Concept:** Instead of generating random synthetic patients, allow the model to instantiate a [Patient](./src/patient.py#51-357) object from a "Digital Twin" stream—real-world or user-defined time-series data (e.g., 3 months of home BP readings).
 **Value:** Moves from population-level average prediction to **individualized precision medicine simulation**.
 **Implementation:**
 - Create `DigitalTwinLoader` to parse CSV/JSON patient history.
@@ -3221,8 +3221,8 @@ Based on deep-dive research using NotebookLM, I have identified three high-impac
 - **Fixed-Dose Combination (FDC):** Adherence Path Coefficient = **0.817**
 - **Monotherapy (Multiple Pills):** Adherence Path Coefficient = **0.389**
 **Implementation:**
-- Add `delivery_method` to [Treatment](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/patient.py#44-49) (Single Pill vs Free Combination).
-- Modify [AdherenceTransition](file:///home/dan/Genesis%20Interview/hypertension_microsim/src/transitions.py#155-204) to use these coefficients as multipliers for the "stay adherent" probability.
+- Add `delivery_method` to [Treatment](./src/patient.py#44-49) (Single Pill vs Free Combination).
+- Modify [AdherenceTransition](./src/transitions.py#155-204) to use these coefficients as multipliers for the "stay adherent" probability.
 
 ## Recommendation
 I recommend implementing **Option 2 (Indirect Costs)** first as it adds a new dimension to the economic analysis, followed by **Option 3 (Adherence Refinement)** to leverage the specific data found. **Option 1 (Digital Twin)** is powerful but requires a specific data schema to be defined.

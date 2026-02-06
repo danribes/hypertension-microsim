@@ -187,7 +187,7 @@ def add_table_slide(title, headers, rows, col_widths=None):
 # Slide 1: Title
 add_title_slide(
     "IXA-001 Cost-Effectiveness and Budget Impact Models",
-    "RFP Deliverables Assessment | Genesis Research Group | February 2026"
+    "RFP Deliverables Assessment | Atlantis Pharmaceuticals | February 2026"
 )
 
 # Slide 2: Executive Summary
@@ -482,11 +482,11 @@ add_table_slide(
 # Slide 21: Thank You
 add_title_slide(
     "Thank You",
-    "IXA-001 CEA & BIM Models | Genesis Research Group"
+    "IXA-001 CEA & BIM Models | Atlantis Pharmaceuticals"
 )
 
 # Save presentation
-output_path = "/home/dan/Genesis Interview/hypertension_microsim/IXA-001_RFP_Alignment_Presentation.pptx"
+output_path = "IXA-001_RFP_Alignment_Presentation.pptx"
 prs.save(output_path)
 print(f"Presentation saved to: {output_path}")
 print(f"Total slides: {len(prs.slides)}")

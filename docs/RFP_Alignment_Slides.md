@@ -1,6 +1,6 @@
 # RFP Alignment Presentation: IXA-001 Models
 
-## Slide Deck Outline for Genesis Research Group
+## Slide Deck Outline for Atlantis Pharmaceuticals
 
 **Prepared for:** Atlantis Pharmaceuticals
 **Date:** February 2026
@@ -13,7 +13,7 @@
 **RFP Deliverables Assessment**
 
 - Prepared for: Atlantis Pharmaceuticals
-- Prepared by: Genesis Research Group
+- Prepared by: Atlantis Pharmaceuticals
 - Date: February 2026
 
 ---
@@ -435,7 +435,7 @@ SubgroupParameters(
 - Documentation: `/hypertension_microsim/docs/`
 
 **Contact:**
-Genesis Research Group - HEOR Modeling Team
+Atlantis Pharmaceuticals - HEOR Modeling Team
 
 ---
 
@@ -444,7 +444,7 @@ Genesis Research Group - HEOR Modeling Team
 ### A1: Technical File Structure
 
 ```
-Genesis Interview/
+projects/
 ├── hypertension_microsim/          # CEA Model
 │   ├── src/
 │   │   ├── simulation.py           # Core engine

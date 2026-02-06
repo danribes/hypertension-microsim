@@ -3,7 +3,7 @@
 
 **Document Version:** 1.0
 **Date:** February 2026
-**Sponsor:** Genesis Pharmaceuticals
+**Sponsor:** Atlantis Pharmaceuticals
 **Prepared By:** HEOR Technical Documentation Team
 
 ---
