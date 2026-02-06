@@ -14,6 +14,37 @@
 
 </div>
 
+## Table of Contents
+
+- [Overview](#overview)
+- [Target Population: Resistant Hypertension](#target-population-resistant-hypertension)
+- [Quick Start with Docker](#quick-start-with-docker)
+- [Installation (Local)](#installation-local)
+- [Key Features](#key-features)
+- [Model Architecture](#model-architecture)
+- [How Event Probabilities Are Actually Assigned](#how-event-probabilities-are-actually-assigned)
+- [Phenotype-Specific Risk Modifiers](#phenotype-specific-risk-modifiers)
+- [Results](#results)
+- [Economic Evaluation](#economic-evaluation)
+- [Technical Implementation](#technical-implementation)
+- [Usage](#usage)
+- [Documentation](#documentation)
+- [Companion Model: Budget Impact](#companion-model-budget-impact)
+- [References](#references)
+- [Version History](#version-history)
+
+---
+
+## Overview
+
+This model simulates the **lifetime progression** of hypertensive patients through **dual disease branches** (cardiac and renal), evaluating the cost-effectiveness of novel antihypertensive treatments against standard care. It implements cutting-edge methodologies from health economics and clinical research to provide robust pharmacoeconomic evidence for reimbursement decisions.
+
+**Model Type:** Individual-Level State-Transition Microsimulation (IL-STM)
+**Cycle Length:** Monthly (to capture acute events and rapid renal transitions)
+**Time Horizon:** Lifetime (up to age 100)
+**Perspective:** Healthcare payer OR Societal (configurable)
+**Discount Rate:** 3% per annum (costs and QALYs)
+
 ---
 
 ## Target Population: Resistant Hypertension
@@ -78,7 +109,7 @@ The fastest way to run the Cost-Effectiveness Analysis (CEA) web interface.
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/danribes/hypertension-microsim.git
 cd hypertension_microsim
 
 # Start the application
@@ -114,36 +145,35 @@ The Streamlit interface provides:
 
 ---
 
-## Table of Contents
+## Installation (Local)
 
-- [Quick Start with Docker](#quick-start-with-docker)
-- [Overview](#overview)
-- [Key Features](#key-features)
-- [Model Architecture](#model-architecture)
-- [Microsimulation vs. Markov Models](#microsimulation-vs-markov-models)
-- [Model Structure](#model-structure)
-- [Population Definition](#population-definition)
-- [Disease Progression Models](#disease-progression-models)
-- [Baseline Risk Stratification](#baseline-risk-stratification)
-- [Patient History Analyzer](#patient-history-analyzer)
-- [Probabilistic Sensitivity Analysis (PSA)](#probabilistic-sensitivity-analysis-psa)
-- [Economic Evaluation](#economic-evaluation)
-- [Results](#results)
-- [Technical Implementation](#technical-implementation)
-- [Usage](#usage)
-- [References](#references)
+### Prerequisites
 
----
+- Python 3.8 or higher
+- pip (Python package manager)
 
-## Overview
+### Setup
 
-This model simulates the **lifetime progression** of hypertensive patients through **dual disease branches** (cardiac and renal), evaluating the cost-effectiveness of novel antihypertensive treatments against standard care. It implements cutting-edge methodologies from health economics and clinical research to provide robust pharmacoeconomic evidence for reimbursement decisions.
+```bash
+# Clone the repository
+git clone https://github.com/danribes/hypertension-microsim.git
+cd hypertension-microsim
 
-**Model Type:** Individual-Level State-Transition Microsimulation (IL-STM)
-**Cycle Length:** Monthly (to capture acute events and rapid renal transitions)
-**Time Horizon:** Lifetime (up to age 100)
-**Perspective:** Healthcare payer OR Societal (configurable)
-**Discount Rate:** 3% per annum (costs and QALYs)
+# Create virtual environment (recommended)
+python -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+
+# Install dependencies
+pip install -r requirements.txt
+```
+
+### Running the Web Interface Locally
+
+```bash
+streamlit run streamlit_app.py
+```
+
+Then open **http://localhost:8502** in your browser.
 
 ---
 
@@ -979,6 +1009,33 @@ Complete HTA documentation suite available in `docs/`:
 | [History Analyzer](docs/history_analyzer_technical_note.md) | Trajectory classification |
 
 All reports are CHEERS 2022 compliant (12/12 items).
+
+---
+
+## Companion Model: Budget Impact
+
+This CEA model has a companion **Budget Impact Model (BIM)** at [`hypertension-bim`](https://github.com/danribes/hypertension-bim) for payer budget planning.
+
+### Model Comparison
+
+| Aspect | CEA (This Model) | BIM |
+|--------|------------------|-----|
+| **Purpose** | Detailed clinical outcomes, HTA submissions | Payer budget planning, formulary decisions |
+| **Audience** | HTA bodies, clinical researchers | Budget holders, formulary committees |
+| **Model Type** | Individual-level state-transition | Cohort-based budget impact |
+| **Time Resolution** | Monthly cycles | Annual aggregations |
+| **Risk Stratification** | GCUA, EOCRI, KDIGO, Framingham phenotypes | Age, CKD stage, prior CV, diabetes |
+
+### When to Use Each Model
+
+| Question | Use Model |
+|----------|-----------|
+| "What is the ICER for IXA-001?" | **CEA (this model)** |
+| "Is IXA-001 cost-effective in PA patients?" | **CEA (this model)** |
+| "How do phenotype modifiers affect ESRD progression?" | **CEA (this model)** |
+| "What will IXA-001 cost my health plan?" | BIM |
+| "What price makes IXA-001 budget-neutral?" | BIM |
+| "What's the Year 3 budget impact at 30% uptake?" | BIM |
 
 ---
 
