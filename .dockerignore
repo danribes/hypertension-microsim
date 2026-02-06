@@ -1,13 +1,27 @@
+# Git
+.git
+.gitignore
+
 # Python
-__pycache__/
+__pycache__
 *.py[cod]
 *$py.class
 *.so
 .Python
 build/
+develop-eggs/
 dist/
+downloads/
 eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
 *.egg-info/
+.installed.cfg
 *.egg
 
 # Virtual environments
@@ -16,6 +30,8 @@ eggs/
 env/
 venv/
 ENV/
+env.bak/
+venv.bak/
 
 # IDE
 .idea/
@@ -30,20 +46,22 @@ ENV/
 .coverage.*
 htmlcov/
 .pytest_cache/
+.hypothesis/
 
-# Output
-output/
+# Documentation
+docs/_build/
+
+# Output files
 *.xlsx
-*.log
-
-# Git
-.git/
-.gitignore
+*.csv
+output/
 
 # Docker
 Dockerfile
 docker-compose.yml
 .dockerignore
 
-# Documentation
-*.md
+# Misc
+*.log
+.DS_Store
+Thumbs.db
