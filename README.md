@@ -21,6 +21,7 @@
 - [Quick Start with Docker](#quick-start-with-docker)
 - [Installation (Local)](#installation-local)
 - [Key Features](#key-features)
+- [Dual Cardiac-Renal Pathway Interactions](#dual-cardiac-renal-pathway-interactions)
 - [Model Architecture](#model-architecture)
 - [How Event Probabilities Are Actually Assigned](#how-event-probabilities-are-actually-assigned)
 - [Phenotype-Specific Risk Modifiers](#phenotype-specific-risk-modifiers)
@@ -345,6 +346,62 @@ Enables **subgroup cost-effectiveness analysis**:
 - "What's the ICER for KDIGO Very High Risk subgroup?"
 - "Do high Framingham patients benefit more?"
 - "How do EOCRI Type B (younger silent renal) patients compare to GCUA Type II?"
+
+---
+
+## Dual Cardiac-Renal Pathway Interactions
+
+The model tracks cardiac and renal states **independently and concurrently** — a patient can be Post-MI and CKD Stage 4 simultaneously. This dual-pathway architecture enables realistic modeling of the cardiorenal syndrome spectrum.
+
+### What Is Modelled
+
+| Interaction | Mechanism | Code Reference |
+|-------------|-----------|----------------|
+| **Additive cost accrual** | Cardiac + renal state costs stacked (e.g. Post-MI $5,500/yr + CKD-4 $8,000/yr) | `src/costs/costs.py:463-514` |
+| **SGLT2i dual benefit** | 40% slower eGFR decline + 30% HF risk reduction | `src/patient.py:484`, `src/transitions.py:562` |
+| **eGFR as CV risk predictor** | Worse renal function increases cardiac event probabilities via PREVENT equations | `src/risks/prevent.py` |
+| **ESRD CV mortality** | 9% additional annual CV death risk for ESRD patients | `src/transitions.py:645` |
+| **Hyperkalemia management** | Stepped approach (monitor → binder → dose reduce → stop) for MRA + renal dysfunction | `src/treatment.py:260-347` |
+| **AF cross-pathway outcome** | 12× risk for PA patients with cardiac + renal cost implications | `src/transitions.py:962-1077` |
+
+### SGLT2 Inhibitor as Dual-Benefit Agent
+
+SGLT2 inhibitors are the primary cross-pathway treatment mechanism:
+
+- **Assigned at baseline** if eGFR < 60 or HF present (40% real-world uptake)
+- **Renal protection**: 40% reduction in eGFR decline rate (DAPA-CKD trial data)
+- **Cardiac protection**: 30% reduction in HF hospitalization risk (DAPA-HF/EMPEROR-Reduced)
+- **Additive cost**: ~$450/month (US), independent of IXA-001 vs spironolactone arm
+
+### Cost Structure for Dual-Burden Patients
+
+Costs are **additive** across pathways:
+
+```
+Total Annual Cost = Cardiac State Cost + Renal State Cost + Drug Costs + SGLT2i (if applicable)
+
+Example (Post-MI + CKD Stage 4 + PA patient on IXA-001):
+  Post-MI management:    $5,500/year
+  CKD Stage 4:           $8,000/year
+  IXA-001:               $6,000/year
+  SGLT2i:                $5,400/year
+  Standard care:           $900/year
+  ─────────────────────────────────
+  Total:                $25,800/year
+```
+
+### Known Limitations
+
+The following cardiorenal interactions are **not explicitly modelled** and represent areas for future enhancement:
+
+| Limitation | Clinical Relevance | Impact |
+|------------|-------------------|--------|
+| **Acute kidney injury (AKI)** | Post-MI cardiogenic shock causes AKI in ~20% of cases | May underestimate renal costs post-cardiac event |
+| **Cardiorenal syndrome** | Type 1-4 CRS feedback loops between heart and kidney | Bidirectional organ damage not captured dynamically |
+| **Treatment escalation for dual burden** | No logic to intensify renoprotection when cardiac patient develops CKD | Treatment remains BP-driven only |
+| **Cross-event time dependencies** | Stroke risk elevated for 12 months post-MI | Events treated as independent within each cycle |
+| **Differential SBP targets** | CKD-4+ patients may warrant different BP goals | All patients share same target (<140 mmHg) |
+| **ACEi/ARB for RAS subgroup** | RAS identified but no differential treatment pathway | May underestimate benefit of targeted RAS treatment |
 
 ---
 

@@ -12,18 +12,19 @@
 
 1. [Executive Summary](#1-executive-summary)
 2. [Model Overview](#2-model-overview)
-3. [Risk Equations](#3-risk-equations)
-4. [Cost Inputs](#4-cost-inputs)
-5. [Utility Values](#5-utility-values)
-6. [Probabilistic Sensitivity Analysis](#6-probabilistic-sensitivity-analysis)
-7. [Subgroup Analysis](#7-subgroup-analysis)
-8. [Background Mortality](#8-background-mortality)
-9. [Patient History Analysis](#9-patient-history-analysis)
-10. [Model Validation](#10-model-validation)
-11. [Results Summary](#11-results-summary)
-12. [CHEERS 2022 Compliance](#12-cheers-2022-compliance)
-13. [References](#13-references)
-14. [Appendices](#14-appendices)
+3. [Dual Cardiac-Renal Pathway Interactions](#3-dual-cardiac-renal-pathway-interactions)
+4. [Risk Equations](#4-risk-equations)
+5. [Cost Inputs](#5-cost-inputs)
+6. [Utility Values](#6-utility-values)
+7. [Probabilistic Sensitivity Analysis](#7-probabilistic-sensitivity-analysis)
+8. [Subgroup Analysis](#8-subgroup-analysis)
+9. [Background Mortality](#9-background-mortality)
+10. [Patient History Analysis](#10-patient-history-analysis)
+11. [Model Validation](#11-model-validation)
+12. [Results Summary](#12-results-summary)
+13. [CHEERS 2022 Compliance](#13-cheers-2022-compliance)
+14. [References](#14-references)
+15. [Appendices](#15-appendices)
 
 ---
 
@@ -64,14 +65,14 @@ This master document consolidates 8 detailed technical reports:
 
 | # | Report | Section | Detailed Report |
 |---|--------|---------|-----------------|
-| 1 | Risk Equations | [Section 3](#3-risk-equations) | `risk_equations_technical_report.md` |
-| 2 | Cost Inputs | [Section 4](#4-cost-inputs) | `cost_inputs_technical_report.md` |
-| 3 | Utility Values | [Section 5](#5-utility-values) | `utility_values_technical_report.md` |
-| 4 | PSA Parameters | [Section 6](#6-probabilistic-sensitivity-analysis) | `psa_parameters_technical_report.md` |
-| 5 | Subgroup Analysis | [Section 7](#7-subgroup-analysis) | `subgroup_analysis_methodology.md` |
-| 6 | Background Mortality | [Section 8](#8-background-mortality) | `background_mortality_technical_note.md` |
-| 7 | History Analyzer | [Section 9](#9-patient-history-analysis) | `history_analyzer_technical_note.md` |
-| 8 | Model Validation | [Section 10](#10-model-validation) | `model_validation_report.md` |
+| 1 | Risk Equations | [Section 4](#4-risk-equations) | `risk_equations_technical_report.md` |
+| 2 | Cost Inputs | [Section 5](#5-cost-inputs) | `cost_inputs_technical_report.md` |
+| 3 | Utility Values | [Section 6](#6-utility-values) | `utility_values_technical_report.md` |
+| 4 | PSA Parameters | [Section 7](#7-probabilistic-sensitivity-analysis) | `psa_parameters_technical_report.md` |
+| 5 | Subgroup Analysis | [Section 8](#8-subgroup-analysis) | `subgroup_analysis_methodology.md` |
+| 6 | Background Mortality | [Section 9](#9-background-mortality) | `background_mortality_technical_note.md` |
+| 7 | History Analyzer | [Section 10](#10-patient-history-analysis) | `history_analyzer_technical_note.md` |
+| 8 | Model Validation | [Section 11](#11-model-validation) | `model_validation_report.md` |
 
 ---
 
@@ -163,11 +164,97 @@ The model implements a dual-pathway cardiorenal microsimulation capturing:
 
 ---
 
-# 3. Risk Equations
+# 3. Dual Cardiac-Renal Pathway Interactions
+
+*This section documents how the model handles patients with simultaneous cardiac comorbidities and renal complications.*
+
+## 3.1 Concurrent State Tracking
+
+The model implements a **dual-branch state tracking system** where cardiac and renal states are tracked independently and simultaneously. A patient can occupy any combination of cardiac and renal states (e.g., Post-MI + CKD Stage 4).
+
+| Dimension | States | Code Reference |
+|-----------|--------|----------------|
+| **Cardiac** | No Acute Event, Acute MI, Post-MI, Acute Stroke, Post-Stroke, Acute HF, Chronic HF, AF, CV Death | `src/patient.py:44-62` |
+| **Renal** | CKD Stage 1-2, Stage 3a, Stage 3b, Stage 4, ESRD | `src/patient.py:64-71` |
+| **Cognitive** | Normal, MCI, Dementia | `src/patient.py:73-76` |
+
+## 3.2 Cross-Pathway Interactions
+
+### 3.2.1 Modelled Interactions
+
+| Interaction | Direction | Mechanism | Code Reference |
+|-------------|-----------|-----------|----------------|
+| **eGFR in PREVENT risk** | Renal → Cardiac | Lower eGFR increases 10-year CVD risk via PREVENT equation coefficients | `src/risks/prevent.py:45-156` |
+| **ESRD CV mortality** | Renal → Cardiac | ESRD adds 9% annual incremental CV death risk (60% of ESRD mortality is CV-mediated) | `src/transitions.py:645-648` |
+| **SGLT2i renal protection** | Cardiac → Renal | Patients with HF receive SGLT2i (40% uptake), which slows eGFR decline by 40% | `src/patient.py:484-491` |
+| **SGLT2i cardiac protection** | Renal → Cardiac | Patients with CKD receive SGLT2i, which reduces HF hospitalization risk by 30% | `src/transitions.py:562-575` |
+| **Hyperkalemia management** | Renal → Treatment | Rising K+ in renal dysfunction triggers stepped MRA management (binder → dose reduce → stop) | `src/treatment.py:260-347` |
+| **Additive cost accrual** | Both | Monthly costs = cardiac state cost + renal state cost + drug costs | `src/costs/costs.py:463-514` |
+| **Additive utility decrements** | Both | QALYs reflect combined disutilities from cardiac and renal states | `src/utilities.py` |
+
+### 3.2.2 Not Currently Modelled
+
+| Limitation | Clinical Relevance | Potential Impact |
+|------------|-------------------|-----------------|
+| **Acute kidney injury (AKI)** | Post-MI cardiogenic shock causes AKI in ~20% of cases | May underestimate renal costs post-cardiac event |
+| **Cardiorenal syndrome (CRS)** | Type 1-4 CRS feedback loops between heart and kidney | Bidirectional organ damage not captured dynamically |
+| **Treatment escalation for dual burden** | No logic to intensify renoprotection when cardiac patient develops CKD | Treatment decisions remain BP-driven only |
+| **Cross-event time dependencies** | Stroke risk elevated for 12 months post-MI | Events treated as independent within each cycle |
+| **Differential SBP targets** | CKD-4+ patients may warrant lower BP targets | All patients share the same target (<140 mmHg) |
+| **ACEi/ARB for RAS subgroup** | RAS identified but no differential treatment pathway | May underestimate benefit of targeted RAS treatment |
+
+## 3.3 SGLT2 Inhibitor as Dual-Benefit Agent
+
+SGLT2 inhibitors represent the primary cross-pathway treatment mechanism in the model:
+
+| Property | Value | Source |
+|----------|-------|--------|
+| **Assignment criteria** | eGFR < 60 OR heart failure present | Population generation |
+| **Real-world uptake** | 40% | Clinical practice data |
+| **Renal benefit** | 40% reduction in eGFR decline rate | DAPA-CKD (Heerspink 2020) |
+| **Cardiac benefit** | 30% reduction in HF hospitalization | DAPA-HF (McMurray 2019) |
+| **Monthly cost (US)** | $450 | WAC pricing |
+| **Monthly cost (UK)** | £35 | BNF pricing |
+
+**Code References:**
+- Assignment logic: `src/population.py:388-397`
+- Renal protection: `src/patient.py:484-491`
+- Cardiac protection: `src/transitions.py:562-575`
+
+## 3.4 Cost Structure for Dual-Burden Patients
+
+Costs are calculated **additively** across pathways:
+
+```
+Total Monthly Cost = Cardiac State Cost + Renal State Cost + Drug Cost + SGLT2i + Monitoring
+
+Example: Post-MI + CKD Stage 4 + PA patient on IXA-001
+  Post-MI management:    $458/month ($5,500/year)
+  CKD Stage 4:           $667/month ($8,000/year)
+  IXA-001:               $500/month
+  SGLT2i:                $450/month
+  Standard care:          $75/month
+  ─────────────────────────────────────────────────
+  Total:               $2,150/month ($25,800/year)
+```
+
+**Code Reference:** `src/costs/costs.py:463-514` (`get_total_cost()`)
+
+## 3.5 Implications for Cost-Effectiveness
+
+Dual cardiac-renal burden patients represent the **highest-cost subgroup** and therefore the greatest opportunity for cost offsets from effective treatment:
+
+1. **PA patients** with concurrent CKD have both elevated cardiac risk (2.05× HF) and accelerated renal decline (1.80× ESRD), making them the primary value driver for IXA-001
+2. **SGLT2i co-prescription** provides dual benefits that partially offset costs in both pathways
+3. **Event cost savings** from prevented MI, stroke, HF, and AF are amplified in dual-burden patients due to higher baseline event rates
+
+---
+
+# 4. Risk Equations
 
 *Detailed report: `risk_equations_technical_report.md`*
 
-## 3.1 AHA PREVENT Equations
+## 4.1 AHA PREVENT Equations
 
 The model uses the 2024 AHA PREVENT equations for 10-year CVD risk:
 
@@ -198,7 +285,7 @@ Monthly: p_monthly = 1 - (1 - p_annual)^(1/12)
 
 **Code Reference:** `src/risks/prevent.py:45-156`
 
-## 3.2 Kidney Failure Risk Equation (KFRE)
+## 4.2 Kidney Failure Risk Equation (KFRE)
 
 4-variable KFRE for 2-year kidney failure risk:
 
@@ -215,7 +302,7 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 
 **Code Reference:** `src/risks/kfre.py:28-95`
 
-## 3.3 Risk Ratio per 10 mmHg SBP Reduction
+## 4.3 Risk Ratio per 10 mmHg SBP Reduction
 
 | Outcome | Risk Ratio | 95% CI | Source |
 |---------|------------|--------|--------|
@@ -228,11 +315,11 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 
 ---
 
-# 4. Cost Inputs
+# 5. Cost Inputs
 
 *Detailed report: `cost_inputs_technical_report.md`*
 
-## 4.1 Drug Costs (US$ 2024)
+## 5.1 Drug Costs (US$ 2024)
 
 | Drug | Monthly Cost | Annual Cost | Source |
 |------|--------------|-------------|--------|
@@ -240,7 +327,7 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 | Spironolactone | $15 | $180 | NADAC 2024 |
 | Background therapy | $75 | $900 | NADAC 2024 |
 
-## 4.2 Acute Event Costs
+## 5.2 Acute Event Costs
 
 | Event | Cost | PSA Distribution | Source |
 |-------|------|------------------|--------|
@@ -252,7 +339,7 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 | Hyperkalemia | $12,000 | Gamma(12, 1000) | HCUP 2022 |
 | ESRD Initiation | $35,000 | Gamma(35, 1000) | USRDS 2023 |
 
-## 4.3 Chronic Management Costs (Annual)
+## 5.3 Chronic Management Costs (Annual)
 
 | Condition | Annual Cost | Source |
 |-----------|-------------|--------|
@@ -264,7 +351,7 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 | ESRD (dialysis) | $90,000 | USRDS 2023 |
 | Chronic AF | $8,500 | Medicare claims |
 
-## 4.4 Indirect Costs (Societal Perspective)
+## 5.4 Indirect Costs (Societal Perspective)
 
 | Event | Productivity Loss | Duration | Total |
 |-------|-------------------|----------|-------|
@@ -277,11 +364,11 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 
 ---
 
-# 5. Utility Values
+# 6. Utility Values
 
 *Detailed report: `utility_values_technical_report.md`*
 
-## 5.1 Baseline Utilities by Age
+## 6.1 Baseline Utilities by Age
 
 | Age | Male | Female | Source |
 |-----|------|--------|--------|
@@ -291,7 +378,7 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 | 70 | 0.79 | 0.76 | Sullivan 2011 |
 | 80 | 0.74 | 0.70 | Sullivan 2011 |
 
-## 5.2 Health State Utilities
+## 6.2 Health State Utilities
 
 | State | Utility | PSA Distribution | Source |
 |-------|---------|------------------|--------|
@@ -303,7 +390,7 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 | ESRD | 0.65 | Beta(52, 28) | Gorodetskaya 2005 |
 | Atrial Fibrillation | 0.90 | Beta(72, 8) | NICE AF guidelines |
 
-## 5.3 Disutility Decrements
+## 6.3 Disutility Decrements
 
 | Event/State | Disutility | Duration | Source |
 |-------------|------------|----------|--------|
@@ -315,7 +402,7 @@ $$\text{Risk}_{2yr} = 1 - 0.9750^{\exp(\text{Linear Predictor} - 7.222)}$$
 | ESRD | 0.35 | Permanent | Gorodetskaya 2005 |
 | Hyperkalemia | 0.05 | 1 month | Assumed |
 
-## 5.4 QALY Calculation
+## 6.4 QALY Calculation
 
 $$\text{QALY}_t = \text{Utility}_t \times \text{Survival}_t \times \frac{1}{(1+r)^t}$$
 
@@ -327,11 +414,11 @@ $$\text{QALY}_t = \text{Utility}_t \times \text{Survival}_t \times \frac{1}{(1+r
 
 ---
 
-# 6. Probabilistic Sensitivity Analysis
+# 7. Probabilistic Sensitivity Analysis
 
 *Detailed report: `psa_parameters_technical_report.md`*
 
-## 6.1 Parameter Summary
+## 7.1 Parameter Summary
 
 | Category | Count | Distribution Types |
 |----------|-------|-------------------|
@@ -345,7 +432,7 @@ $$\text{QALY}_t = \text{Utility}_t \times \text{Survival}_t \times \frac{1}{(1+r
 | Disutilities | 8 | Beta |
 | **Total** | **47** | - |
 
-## 6.2 Key Parameter Distributions
+## 7.2 Key Parameter Distributions
 
 ### Treatment Effects
 | Parameter | Distribution | Mean | SD |
@@ -367,7 +454,7 @@ $$\text{QALY}_t = \text{Utility}_t \times \text{Survival}_t \times \frac{1}{(1+r
 | PA AF modifier | Lognormal | 3.0 | 0.20 |
 | PA ESRD modifier | Lognormal | 1.80 | 0.15 |
 
-## 6.3 Correlation Structure
+## 7.3 Correlation Structure
 
 Four correlation groups with Cholesky decomposition:
 
@@ -376,7 +463,7 @@ Four correlation groups with Cholesky decomposition:
 3. **Risk Ratios**: MI, Stroke, HF, Death, AF (ρ = 0.50-0.80)
 4. **Disutilities**: All event disutilities (ρ = 0.40-0.65)
 
-## 6.4 Convergence
+## 7.4 Convergence
 
 | Metric | Recommendation |
 |--------|----------------|
@@ -388,11 +475,11 @@ Four correlation groups with Cholesky decomposition:
 
 ---
 
-# 7. Subgroup Analysis
+# 8. Subgroup Analysis
 
 *Detailed report: `subgroup_analysis_methodology.md`*
 
-## 7.1 Pre-Specified Subgroups
+## 8.1 Pre-Specified Subgroups
 
 ### Dimension 1: Secondary HTN Etiology
 | Subgroup | Prevalence | IXA-001 Response | Baseline Risk Modifier (HF) |
@@ -415,7 +502,7 @@ Four correlation groups with Cholesky decomposition:
 | GCUA Type IV | ≥60 | >60 | Senescent |
 | KDIGO | Any | ≤60 | CKD pathway |
 
-## 7.2 Subgroup Results Summary
+## 8.2 Subgroup Results Summary
 
 | Subgroup | N | Δ Cost | Δ QALY | ICER | Events Prevented (per 1000) |
 |----------|---|--------|--------|------|----------------------------|
@@ -424,7 +511,7 @@ Four correlation groups with Cholesky decomposition:
 | RAS | 85 | +$28,500 | +0.074 | $385,135 | MI:6, Stroke:8, HF:12, ESRD:10 |
 | Essential HTN | 500 | +$35,200 | -0.012 | Dominated | MI:2, Stroke:3, HF:4, AF:3 |
 
-## 7.3 Value-Based Prescribing Recommendation
+## 8.3 Value-Based Prescribing Recommendation
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -451,18 +538,18 @@ Four correlation groups with Cholesky decomposition:
 
 ---
 
-# 8. Background Mortality
+# 9. Background Mortality
 
 *Detailed report: `background_mortality_technical_note.md`*
 
-## 8.1 Life Table Sources
+## 9.1 Life Table Sources
 
 | Country | Source | Year | Age Resolution |
 |---------|--------|------|----------------|
 | United States | SSA Actuarial Life Tables | 2021 | Single-year |
 | United Kingdom | ONS National Life Tables | 2020-2022 | 5-year intervals |
 
-## 8.2 Selected Mortality Rates (US)
+## 9.2 Selected Mortality Rates (US)
 
 | Age | Male qx | Female qx | Male:Female Ratio |
 |-----|---------|-----------|-------------------|
@@ -472,7 +559,7 @@ Four correlation groups with Cholesky decomposition:
 | 70 | 0.02679 | 0.02000 | 1.34 |
 | 80 | 0.06653 | 0.05386 | 1.24 |
 
-## 8.3 Probability Conversions
+## 9.3 Probability Conversions
 
 **Annual to Monthly:**
 $$p_{month} = 1 - (1 - p_{year})^{1/12}$$
@@ -481,7 +568,7 @@ $$p_{month} = 1 - (1 - p_{year})^{1/12}$$
 - Annual qx = 0.01743
 - Monthly = 1 - (1 - 0.01743)^(1/12) = 0.001463
 
-## 8.4 Competing Risks Framework
+## 9.4 Competing Risks Framework
 
 ```
 Total Mortality = Background + CV Deaths + Renal Deaths
@@ -495,11 +582,11 @@ Adjusted Background = Life Table × (1 - CV_Fraction - Renal_Fraction)
 
 ---
 
-# 9. Patient History Analysis
+# 10. Patient History Analysis
 
 *Detailed report: `history_analyzer_technical_note.md`*
 
-## 9.1 Dynamic Risk Modifiers
+## 10.1 Dynamic Risk Modifiers
 
 The PatientHistoryAnalyzer leverages full patient trajectories to modify risk:
 
@@ -510,7 +597,7 @@ The PatientHistoryAnalyzer leverages full patient trajectories to modify risk:
 | Mortality | 1.0× - 4.0× | Charlson score, COPD, SUD |
 | Adherence | 0.3× - 1.0× | Mental health, substance use |
 
-## 9.2 Trajectory Classification
+## 10.2 Trajectory Classification
 
 ### eGFR Trajectories
 | Type | Annual Decline | Modifier | Prevalence |
@@ -528,7 +615,7 @@ The PatientHistoryAnalyzer leverages full patient trajectories to modify risk:
 | Fair | 140-149 mmHg | 1.20× |
 | Poor | ≥150 mmHg | 1.50× |
 
-## 9.3 Time-Decay Function
+## 10.3 Time-Decay Function
 
 Prior event risk decays exponentially:
 
@@ -545,11 +632,11 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 
 ---
 
-# 10. Model Validation
+# 11. Model Validation
 
 *Detailed report: `model_validation_report.md`*
 
-## 10.1 Validation Framework
+## 11.1 Validation Framework
 
 | Validation Type | Status | Method |
 |-----------------|--------|--------|
@@ -560,7 +647,7 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 | Cross-Validation | ✓ Pass | ICER/NICE model comparison |
 | Predictive Validity | Pending | Phase III data comparison |
 
-## 10.2 Unit Test Coverage
+## 11.2 Unit Test Coverage
 
 | Module | Tests | Pass Rate |
 |--------|-------|-----------|
@@ -574,7 +661,7 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 | Population | 6 | 100% |
 | **Total** | **76** | **100%** |
 
-## 10.3 External Calibration
+## 11.3 External Calibration
 
 | Outcome | Model Prediction | Published Data | Source |
 |---------|-----------------|----------------|--------|
@@ -583,7 +670,7 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 | 5-yr ESRD (CKD G4) | 18.5% | 17-21% | CKD-PC |
 | Life expectancy (65M) | 17.1 yrs | 17.4 yrs | SSA 2021 |
 
-## 10.4 Cross-Validation
+## 11.4 Cross-Validation
 
 | Comparator Model | Agreement | Notes |
 |------------------|-----------|-------|
@@ -595,9 +682,9 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 
 ---
 
-# 11. Results Summary
+# 12. Results Summary
 
-## 11.1 Base Case Results (20-Year, PA Subgroup)
+## 12.1 Base Case Results (20-Year, PA Subgroup)
 
 | Outcome | IXA-001 | Spironolactone | Difference |
 |---------|---------|----------------|------------|
@@ -606,7 +693,7 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 | Life Years | 14.52 | 14.38 | +0.14 |
 | **ICER** | - | - | **$245,441/QALY** |
 
-## 11.2 Events Prevented (PA Subgroup, per 1,000)
+## 12.2 Events Prevented (PA Subgroup, per 1,000)
 
 | Event | IXA-001 | Spironolactone | Prevented |
 |-------|---------|----------------|-----------|
@@ -617,7 +704,7 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 | Atrial Fibrillation | 120 | 153 | **33** |
 | CV Death | 28 | 36 | 8 |
 
-## 11.3 Cost-Effectiveness Acceptability
+## 12.3 Cost-Effectiveness Acceptability
 
 | WTP Threshold | P(Cost-Effective) - PA | P(Cost-Effective) - Overall |
 |---------------|------------------------|------------------------------|
@@ -626,7 +713,7 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 | $200,000/QALY | 35% | 12% |
 | $300,000/QALY | 65% | 28% |
 
-## 11.4 Threshold Pricing
+## 12.4 Threshold Pricing
 
 | Subgroup | Current Price | Price at $150K WTP | Reduction Needed |
 |----------|---------------|-------------------|------------------|
@@ -637,7 +724,7 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 
 ---
 
-# 12. CHEERS 2022 Compliance
+# 13. CHEERS 2022 Compliance
 
 | Item | Requirement | Status | Documentation |
 |------|-------------|--------|---------------|
@@ -648,27 +735,27 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 | 5 | Setting/Location | ✓ | Section 2 |
 | 6 | Comparators | ✓ | Section 2 |
 | 7 | Time Horizon | ✓ | Section 2 |
-| 8 | Discount Rate | ✓ | Section 5 |
-| 9 | Health Outcomes | ✓ | Section 5 |
-| 10 | Costs | ✓ | Section 4 |
-| 11 | Analytic Methods | ✓ | Section 2-3 |
-| 12 | Measurement of Outcomes | ✓ | Section 5 |
-| 13 | Valuation of Outcomes | ✓ | Section 5 |
-| 14 | Valuation Methods | ✓ | Section 5 |
-| 15 | Resource Estimation | ✓ | Section 4 |
-| 16 | Unit Costs | ✓ | Section 4 |
-| 17 | Productivity Costs | ✓ | Section 4 |
-| 18 | Effect Estimation | ✓ | Section 3 |
-| 19 | Uncertainty Methods | ✓ | Section 6 |
-| 20 | Uncertainty Parameters | ✓ | Section 6 |
-| 21 | Heterogeneity | ✓ | Section 7 |
-| 22 | Model Validation | ✓ | Section 10 |
+| 8 | Discount Rate | ✓ | Section 6 |
+| 9 | Health Outcomes | ✓ | Section 6 |
+| 10 | Costs | ✓ | Section 5 |
+| 11 | Analytic Methods | ✓ | Section 2-4 |
+| 12 | Measurement of Outcomes | ✓ | Section 6 |
+| 13 | Valuation of Outcomes | ✓ | Section 6 |
+| 14 | Valuation Methods | ✓ | Section 6 |
+| 15 | Resource Estimation | ✓ | Section 5 |
+| 16 | Unit Costs | ✓ | Section 5 |
+| 17 | Productivity Costs | ✓ | Section 5 |
+| 18 | Effect Estimation | ✓ | Section 4 |
+| 19 | Uncertainty Methods | ✓ | Section 7 |
+| 20 | Uncertainty Parameters | ✓ | Section 7 |
+| 21 | Heterogeneity | ✓ | Section 8 |
+| 22 | Model Validation | ✓ | Section 11 |
 
 **Compliance: 22/22 items (100%)**
 
 ---
 
-# 13. References
+# 14. References
 
 1. Khan SS, et al. Development and Validation of the American Heart Association's PREVENT Equations. Circulation. 2024;149:430-449.
 
@@ -692,7 +779,7 @@ $$\text{Modifier} = 1.0 + (\text{Excess Risk}) \times e^{-0.05 \times \text{mont
 
 ---
 
-# 14. Appendices
+# 15. Appendices
 
 ## Appendix A: Detailed Technical Reports
 
