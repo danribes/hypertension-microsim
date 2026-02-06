@@ -1,8 +1,13 @@
 """
 Test primary aldosteronism treatment response modifier integration.
 
-Verifies that PA patients receive enhanced treatment response (30% boost)
-to aldosterone-targeting therapies like IXA-001.
+Verifies that PA patients receive enhanced treatment response to
+aldosterone-targeting therapies like IXA-001.
+
+Option B modifiers (Feb 2026):
+  - IXA-001: 1.70× (ASI provides complete aldosterone suppression)
+  - Spironolactone: 1.40× (MRA blocks receptor, but aldosterone escape)
+  - Standard care: 0.75× (largely ineffective in PA)
 """
 
 import sys
@@ -45,10 +50,10 @@ class TestPrimaryAldosteronismModifier:
     """Tests for primary aldosteronism treatment response modifier."""
 
     def test_treatment_response_modifier_pa_patient(self):
-        """PA patients should have 1.30x modifier for IXA-001."""
+        """PA patients should have 1.70x modifier for IXA-001 (Option B)."""
         patient = create_test_patient(1, has_pa=True)
         modifier = patient.baseline_risk_profile.get_treatment_response_modifier("IXA_001")
-        assert modifier == 1.30
+        assert modifier == 1.70
 
     def test_treatment_response_modifier_non_pa_patient(self):
         """Non-PA patients should have 1.0x modifier for IXA-001."""
@@ -57,23 +62,23 @@ class TestPrimaryAldosteronismModifier:
         assert modifier == 1.0
 
     def test_treatment_response_modifier_spironolactone(self):
-        """PA patients should have 1.25x modifier for spironolactone."""
+        """PA patients should have 1.40x modifier for spironolactone (Option B)."""
         patient = create_test_patient(1, has_pa=True)
         modifier = patient.baseline_risk_profile.get_treatment_response_modifier("SPIRONOLACTONE")
-        assert modifier == 1.25
+        assert modifier == 1.40
 
     def test_treatment_response_modifier_standard_care(self):
-        """PA patients should have 1.0x modifier for standard care."""
+        """PA patients should have 0.75x modifier for standard care (Option B)."""
         patient = create_test_patient(1, has_pa=True)
         modifier = patient.baseline_risk_profile.get_treatment_response_modifier("STANDARD_CARE")
-        assert modifier == 1.0
+        assert modifier == 0.75
 
 
 class TestTreatmentAssignmentIntegration:
     """Tests for PA modifier integration in treatment assignment."""
 
     def test_pa_patients_get_enhanced_sbp_reduction(self):
-        """PA patients should get ~30% better SBP reduction from IXA-001."""
+        """PA patients should get ~70% better SBP reduction from IXA-001 (Option B)."""
         n_trials = 1000
         pa_reductions = []
         non_pa_reductions = []
@@ -96,7 +101,7 @@ class TestTreatmentAssignmentIntegration:
         ratio = mean_pa / mean_no_pa
 
         # Allow 5% tolerance for randomness
-        assert abs(ratio - 1.30) < 0.05, f"Expected ratio ~1.30, got {ratio:.2f}"
+        assert abs(ratio - 1.70) < 0.05, f"Expected ratio ~1.70, got {ratio:.2f}"
 
     def test_sbp_reduction_magnitude(self):
         """Verify SBP reductions are in expected clinical range."""
@@ -123,7 +128,7 @@ if __name__ == "__main__":
 
     print(f"PA patient IXA-001 modifier:     {mod_pa:.2f}x")
     print(f"Non-PA patient IXA-001 modifier: {mod_no_pa:.2f}x")
-    print(f"Expected: PA=1.30x, Non-PA=1.00x")
+    print(f"Expected: PA=1.70x, Non-PA=1.00x")
 
     print("\n" + "=" * 50)
     print("Testing assign_treatment() integration")
@@ -151,9 +156,9 @@ if __name__ == "__main__":
     print(f"Mean SBP reduction (PA patients):     {mean_pa:.2f} mmHg")
     print(f"Mean SBP reduction (non-PA patients): {mean_no_pa:.2f} mmHg")
     print(f"Ratio (PA/non-PA):                    {ratio:.2f}x")
-    print(f"Expected ratio:                       1.30x")
+    print(f"Expected ratio:                       1.70x")
 
-    if abs(ratio - 1.30) < 0.05:
+    if abs(ratio - 1.70) < 0.05:
         print("\n✓ SUCCESS: PA treatment response modifier is working correctly!")
     else:
-        print(f"\n✗ FAILED: Expected ratio ~1.30, got {ratio:.2f}")
+        print(f"\n✗ FAILED: Expected ratio ~1.70, got {ratio:.2f}")
