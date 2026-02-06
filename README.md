@@ -1,6 +1,18 @@
+<div align="center">
+
 # Hypertension Cardiorenal Microsimulation Model
 
-A state-of-the-art **Individual-Level State-Transition Microsimulation (IL-STM)** for pharmacoeconomic evaluation of hypertension treatments in patients with cardiorenal disease. This model implements advanced features including dynamic blood pressure modeling, enhanced eGFR decline equations, three-dimensional baseline risk stratification, **atrial fibrillation as an aldosterone-specific outcome**, and **societal perspective cost analysis**.
+**Individual-Level State-Transition Microsimulation for IXA-001 Cost-Effectiveness Analysis**
+
+![Python](https://img.shields.io/badge/python-3.8%2B-blue?logo=python&logoColor=white)
+![Streamlit](https://img.shields.io/badge/streamlit-1.28%2B-FF4B4B?logo=streamlit&logoColor=white)
+![Docker](https://img.shields.io/badge/docker-ready-2496ED?logo=docker&logoColor=white)
+![License](https://img.shields.io/badge/license-proprietary-red)
+![Version](https://img.shields.io/badge/version-4.0-green)
+
+*A pharmacoeconomic evaluation tool for hypertension treatments in patients with resistant hypertension and cardiorenal disease. Features dual cardiac-renal disease branches, atrial fibrillation tracking, and societal perspective cost analysis.*
+
+</div>
 
 ---
 
@@ -804,6 +816,7 @@ The incremental drug cost of IXA-001 over 20 years is approximately **$116,400**
 
 ```
 hypertension_microsim/
+├── streamlit_app.py           # Streamlit web interface
 ├── src/
 │   ├── __init__.py
 │   ├── patient.py              # Patient dataclass with AF tracking
@@ -812,18 +825,21 @@ hypertension_microsim/
 │   ├── history_analyzer.py     # Dynamic risk modification
 │   ├── treatment.py            # Treatment effects & safety rules
 │   ├── simulation.py           # Core engine with AF and indirect costs
-│   ├── transitions.py          # CV events + AFTransition class (NEW)
+│   ├── transitions.py          # CV events + AFTransition class
+│   ├── psa.py                  # Probabilistic sensitivity analysis
+│   ├── utilities.py            # QALY calculations with AF disutility
 │   ├── costs/
-│   │   └── costs.py            # Direct + Indirect costs, AF costs (NEW)
-│   ├── utilities.py            # QALY calculations with AF disutility (NEW)
-│   ├── risks/
-│   │   ├── prevent.py          # AHA PREVENT equations
-│   │   ├── kfre.py             # Kidney Failure Risk Equation
-│   │   └── life_tables.py      # Background mortality
-│   └── psa.py                  # Probabilistic sensitivity analysis
+│   │   └── costs.py            # Direct + indirect costs, AF costs
+│   └── risks/
+│       ├── prevent.py          # AHA PREVENT equations
+│       ├── kfre.py             # Kidney Failure Risk Equation
+│       └── life_tables.py      # Background mortality
+├── scripts/
+│   ├── run_demo.py             # Basic CEA demo runner
+│   ├── run_cea_from_excel.py   # Excel interface runner
+│   └── run_psa_demo.py         # PSA demo/analysis runner
 ├── tests/
-├── reports/
-├── run_demo.py
+├── docs/                       # HTA documentation suite
 └── README.md
 ```
 
@@ -943,6 +959,26 @@ cea.calculate_icer()
 print(f"PA Subgroup ICER: ${cea.icer:,.0f}/QALY")
 print(f"AF Events Prevented: {results_spi.new_af_events - results_ixa.new_af_events}")
 ```
+
+---
+
+## Documentation
+
+Complete HTA documentation suite available in `docs/`:
+
+| Document | Description |
+|----------|-------------|
+| [Technical Documentation](docs/IXA-001_Model_Technical_Documentation.md) | Master technical guide |
+| [Risk Equations](docs/risk_equations_technical_report.md) | PREVENT, KFRE coefficients, life tables |
+| [Cost Inputs](docs/cost_inputs_technical_report.md) | Drug/event costs, indirect costs |
+| [Utility Values](docs/utility_values_technical_report.md) | EQ-5D values, disutilities |
+| [Model Validation](docs/model_validation_report.md) | 76 tests, external calibration |
+| [PSA Parameters](docs/psa_parameters_technical_report.md) | 47 parameters, correlations |
+| [Subgroup Methods](docs/subgroup_analysis_methodology.md) | 5 dimensions, 17 categories |
+| [Background Mortality](docs/background_mortality_technical_note.md) | SSA/ONS life tables |
+| [History Analyzer](docs/history_analyzer_technical_note.md) | Trajectory classification |
+
+All reports are CHEERS 2022 compliant (12/12 items).
 
 ---
 
