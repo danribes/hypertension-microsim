@@ -203,6 +203,17 @@ The model implements a **dual-branch state tracking system** where cardiac and r
 | **Differential SBP targets** | CKD-4+ patients may warrant lower BP targets | All patients share the same target (<140 mmHg) |
 | **ACEi/ARB for RAS subgroup** | RAS identified but no differential treatment pathway | May underestimate benefit of targeted RAS treatment |
 
+### 3.2.3 Treatment for Dual-Burden Patients
+
+Currently, treatment decisions are **BP-driven only** (`src/treatment.py`):
+
+- **Intensify** if SBP > 130 mmHg (with 50% clinical inertia probability)
+- **No consideration** of simultaneous cardiac + renal states when escalating or de-escalating treatment
+- **SGLT2i** is the only agent providing explicit dual-pathway benefit (cardiac + renal)
+- **Hyperkalemia management** is the only renal-aware treatment adjustment (stepped approach for MRA patients with rising K+)
+
+**Code Reference:** `src/treatment.py:225-246` (`should_intensify_treatment()`)
+
 ## 3.3 SGLT2 Inhibitor as Dual-Benefit Agent
 
 SGLT2 inhibitors represent the primary cross-pathway treatment mechanism in the model:
