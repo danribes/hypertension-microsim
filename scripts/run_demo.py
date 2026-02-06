@@ -7,7 +7,8 @@ IXA-001 to spironolactone in resistant hypertension.
 """
 
 import sys
-sys.path.insert(0, '.')
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from src import run_cea, print_cea_results
 

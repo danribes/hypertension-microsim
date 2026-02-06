@@ -17,8 +17,8 @@ import argparse
 import sys
 from pathlib import Path
 
-# Add current directory to path
-sys.path.insert(0, str(Path(__file__).parent))
+# Add project root to path
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from cea_interface.excel_template import CEAExcelTemplate
 from cea_interface.bridge import CEABridge, print_results
