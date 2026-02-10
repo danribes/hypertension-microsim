@@ -7,6 +7,8 @@ services:
     environment:
       - STREAMLIT_SERVER_HEADLESS=true
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - JULIA_NUM_THREADS=auto
+      - PYTHON_JULIACALL_HANDLE_SIGNALS=yes
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "curl", "--fail", "http://localhost:8501/_stcore/health"]

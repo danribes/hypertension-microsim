@@ -1098,6 +1098,10 @@ class PSARunner:
     - Outer loop: Sample parameters from distributions (K iterations)
     - Inner loop: Simulate patients with sampled parameters (N patients per arm)
     - Common Random Numbers: Same patient seeds for both treatment arms
+
+    Supports two backends:
+    - Python (default): Original pure-Python simulation
+    - Julia: High-performance Julia backend via juliacall (~10-50x faster)
     """
 
     def __init__(
@@ -1105,7 +1109,8 @@ class PSARunner:
         base_config: SimulationConfig,
         distributions: Optional[Dict[str, ParameterDistribution]] = None,
         correlation_groups: Optional[Dict[str, CorrelationGroup]] = None,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        use_julia_backend: bool = False,
     ):
         """
         Initialize PSA runner.
@@ -1115,11 +1120,13 @@ class PSARunner:
             distributions: Parameter distributions (default: get_default_parameter_distributions())
             correlation_groups: Correlation groups (default: get_default_correlation_groups())
             seed: Random seed for reproducibility
+            use_julia_backend: If True, use Julia for the inner simulation loop
         """
         self.base_config = base_config
         self.distributions = distributions or get_default_parameter_distributions()
         self.correlation_groups = correlation_groups or get_default_correlation_groups()
         self.seed = seed
+        self.use_julia_backend = use_julia_backend
 
         # Initialize sampler
         self.sampler = CholeskySampler(
@@ -1142,11 +1149,17 @@ class PSARunner:
             n_iterations: Number of parameter samples (outer loop)
             use_common_random_numbers: Use same patient seeds for both arms
             show_progress: Show progress bar
-            parallel: Use parallel processing (not implemented yet)
+            parallel: Use Julia threaded parallelism (requires use_julia_backend=True)
 
         Returns:
             PSAResults object with all iteration data
         """
+        # Fast path: Julia parallel PSA (outer loop in Julia with threading)
+        if parallel and self.use_julia_backend:
+            return self._run_julia_parallel(
+                n_iterations, use_common_random_numbers, show_progress,
+            )
+
         # Sample all parameter sets upfront
         parameter_samples = self.sampler.sample(n_iterations)
 
@@ -1176,6 +1189,65 @@ class PSARunner:
             comparator_name="Spironolactone"
         )
 
+    def _run_julia_parallel(
+        self,
+        n_iterations: int,
+        use_crn: bool,
+        show_progress: bool,
+    ) -> PSAResults:
+        """
+        Run PSA with Julia threaded outer loop.
+
+        Samples parameters in Python, then sends all iterations to Julia
+        for parallel execution using Threads.@threads.
+        """
+        from .julia_bridge import run_psa_parallel_julia
+
+        # Sample all parameter sets upfront
+        parameter_samples = self.sampler.sample(n_iterations)
+
+        # Build list of param dicts
+        all_params = []
+        for k in range(n_iterations):
+            params_k = {name: float(values[k]) for name, values in parameter_samples.items()}
+            all_params.append(params_k)
+
+        # Generate one reference population for SoA conversion
+        pop_params = PopulationParams(
+            n_patients=self.base_config.n_patients,
+            seed=(self.seed or 0),
+        )
+        generator = PopulationGenerator(pop_params)
+        ref_patients = generator.generate()
+
+        results_list = run_psa_parallel_julia(
+            patients=ref_patients,
+            config=self.base_config,
+            all_psa_params=all_params,
+            base_seed=self.seed or 0,
+            use_crn=use_crn,
+        )
+
+        iterations = []
+        for k, res in enumerate(results_list):
+            iterations.append(PSAIteration(
+                iteration=k,
+                parameters=all_params[k],
+                ixa_costs=res["ixa_mean_costs"],
+                ixa_qalys=res["ixa_mean_qalys"],
+                ixa_life_years=res["ixa_mean_life_years"],
+                comparator_costs=res["comp_mean_costs"],
+                comparator_qalys=res["comp_mean_qalys"],
+                comparator_life_years=res["comp_mean_life_years"],
+            ))
+
+        return PSAResults(
+            iterations=iterations,
+            n_patients_per_iteration=self.base_config.n_patients,
+            intervention_name="IXA-001",
+            comparator_name="Spironolactone",
+        )
+
     def _run_single_iteration(
         self,
         iteration: int,
@@ -1193,9 +1265,6 @@ class PSARunner:
         Returns:
             PSAIteration with results
         """
-        # Create modified configuration with sampled parameters
-        config = self._apply_parameters(parameters)
-
         # Determine seeds for CRN
         if use_crn:
             base_seed = (self.seed or 0) + iteration * 1000000
@@ -1209,9 +1278,18 @@ class PSARunner:
 
         # Generate population (same for both arms when using CRN)
         pop_params = PopulationParams(
-            n_patients=config.n_patients,
+            n_patients=self.base_config.n_patients,
             seed=population_seed
         )
+
+        if self.use_julia_backend:
+            return self._run_single_iteration_julia(
+                iteration, parameters, pop_params,
+                sim_seed_ixa, sim_seed_comp,
+            )
+
+        # ── Python backend ────────────────────────────────────────────
+        config = self._apply_parameters(parameters)
 
         # IXA-001 arm
         generator_ixa = PopulationGenerator(pop_params)
@@ -1244,6 +1322,44 @@ class PSARunner:
             comparator_costs=results_comp.mean_costs,
             comparator_qalys=results_comp.mean_qalys,
             comparator_life_years=results_comp.mean_life_years
+        )
+
+    def _run_single_iteration_julia(
+        self,
+        iteration: int,
+        parameters: Dict[str, float],
+        pop_params: PopulationParams,
+        sim_seed_ixa: Optional[int],
+        sim_seed_comp: Optional[int],
+    ) -> PSAIteration:
+        """Run a single PSA iteration using the Julia backend."""
+        from .julia_bridge import run_arm_julia, psa_params_to_dict, config_to_dict
+
+        psa_dict = psa_params_to_dict(parameters)
+
+        # IXA-001 arm
+        generator_ixa = PopulationGenerator(pop_params)
+        patients_ixa = generator_ixa.generate()
+        results_ixa = run_arm_julia(
+            patients_ixa, 0, self.base_config, parameters, sim_seed_ixa or 0,
+        )
+
+        # Comparator arm
+        generator_comp = PopulationGenerator(pop_params)
+        patients_comp = generator_comp.generate()
+        results_comp = run_arm_julia(
+            patients_comp, 1, self.base_config, parameters, sim_seed_comp or 0,
+        )
+
+        return PSAIteration(
+            iteration=iteration,
+            parameters=parameters,
+            ixa_costs=results_ixa["mean_costs"],
+            ixa_qalys=results_ixa["mean_qalys"],
+            ixa_life_years=results_ixa["mean_life_years"],
+            comparator_costs=results_comp["mean_costs"],
+            comparator_qalys=results_comp["mean_qalys"],
+            comparator_life_years=results_comp["mean_life_years"],
         )
 
     def _apply_parameters(self, parameters: Dict[str, float]) -> SimulationConfig:
