@@ -2015,6 +2015,15 @@ def display_simulation_calculations(results: SimulationResults, currency: str, s
 
 # ============== PSA DISPLAY FUNCTIONS ==============
 
+def _julia_available() -> bool:
+    """Check if the Julia backend is available."""
+    try:
+        import juliacall  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
 def run_psa_with_progress(
     n_iterations: int,
     n_patients: int,
@@ -2023,7 +2032,11 @@ def run_psa_with_progress(
     discount_rate: float,
     progress_container
 ) -> PSAResults:
-    """Run PSA with Streamlit progress updates."""
+    """Run PSA with Streamlit progress updates.
+
+    Automatically uses the Julia parallel backend when available,
+    falling back to sequential Python execution otherwise.
+    """
     import time
 
     # Create base simulation config
@@ -2035,10 +2048,26 @@ def run_psa_with_progress(
         show_progress=False
     )
 
-    # Initialize PSA runner
-    runner = PSARunner(base_config=config, seed=seed)
+    use_julia = _julia_available()
 
-    # Sample all parameter sets
+    # Initialize PSA runner
+    runner = PSARunner(base_config=config, seed=seed, use_julia_backend=use_julia)
+
+    if use_julia:
+        # Julia parallel path — all iterations run in Julia threads at once
+        progress_bar = progress_container.progress(0, text="Running PSA (Julia parallel)...")
+        t0 = time.time()
+        results = runner.run(
+            n_iterations=n_iterations,
+            use_common_random_numbers=True,
+            show_progress=False,
+            parallel=True,
+        )
+        elapsed = time.time() - t0
+        progress_bar.progress(1.0, text=f"PSA Complete! ({elapsed:.1f}s)")
+        return results
+
+    # Python sequential fallback
     parameter_samples = runner.sampler.sample(n_iterations)
 
     iterations = []
