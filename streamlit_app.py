@@ -2305,7 +2305,7 @@ def display_psa_results(results: PSAResults, currency: str = "$"):
 
     with col3:
         # EVPI CSV
-        evpi_csv = results.generate_evpi().to_csv(index=False)
+        evpi_csv = results.generate_evpi_curve().to_csv(index=False)
         st.download_button(
             label="Download EVPI CSV",
             data=evpi_csv,
