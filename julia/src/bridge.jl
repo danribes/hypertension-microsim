@@ -147,19 +147,27 @@ end
 
 Entry point called from Python via juliacall for a single arm.
 """
+# Convert any dict-like (including PyDict) to Dict{String,Any}
+_to_dict(d::Dict{String,Any}) = d
+_to_dict(d::Dict) = Dict{String,Any}(String(k) => v for (k,v) in d)
+_to_dict(d) = Dict{String,Any}(String(k) => d[k] for k in keys(d))
+
 function simulate_arm_from_python(
-    patient_dict::Dict,
-    treatment_code::Int,
-    config_dict::Dict,
-    psa_dict::Dict,
-    seed::Int,
+    patient_dict_raw,
+    treatment_code,
+    config_dict_raw,
+    psa_dict_raw,
+    seed,
 )::Dict{String, Any}
+    patient_dict = _to_dict(patient_dict_raw)
+    config_dict = _to_dict(config_dict_raw)
+    psa_dict = _to_dict(psa_dict_raw)
     n = length(patient_dict["age"])
     p = PatientArrays(n)
     _unpack_patients!(p, patient_dict)
     cfg = _make_config(config_dict, n)
     psa = _make_psa(psa_dict)
-    results = simulate_arm!(p, cfg, psa, Int8(treatment_code), UInt64(seed))
+    results = simulate_arm!(p, cfg, psa, Int8(Int(treatment_code)), UInt64(Int(seed)))
     return _results_to_dict(results)
 end
 
@@ -186,12 +194,18 @@ are utilized. On a 16-core machine with 1000 iterations, each core processes
 ~62 iterations with dynamic load balancing.
 """
 function run_psa_parallel(
-    patient_dict::Dict,
-    config_dict::Dict,
-    all_psa_dicts::Vector,
-    base_seed::Int,
+    patient_dict_raw,
+    config_dict_raw,
+    all_psa_dicts_raw,
+    base_seed,
     use_crn::Bool,
 )::Vector{Dict{String, Any}}
+    # Convert Python types to Julia types
+    patient_dict = _to_dict(patient_dict_raw)
+    config_dict = _to_dict(config_dict_raw)
+    all_psa_dicts = [_to_dict(d) for d in all_psa_dicts_raw]
+    base_seed = Int(base_seed)
+
     n_iter = length(all_psa_dicts)
     n = length(patient_dict["age"])
     cfg = _make_config(config_dict, n)
